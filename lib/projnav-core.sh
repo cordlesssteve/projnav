@@ -18,25 +18,30 @@ if [[ -z "${PROJECT_CACHE_JSON:-}" ]]; then
 fi
 
 # Search configuration for smart git-aware discovery
-declare -a SEARCH_PATHS=(
-    "$HOME/projects"
-    "$HOME/.claude"
-    "$HOME/.system-config"
-)
-MAX_DEPTH=10
+# These can be overridden by user config file
+if [[ -z "${SEARCH_PATHS:-}" ]]; then
+    declare -a SEARCH_PATHS=(
+        "$HOME/projects"
+        "$HOME/dev"
+        "$HOME/work"
+    )
+fi
+
+if [[ -z "${MAX_DEPTH:-}" ]]; then
+    MAX_DEPTH=10
+fi
 
 # Project grouping configuration
 # Define related projects that should be grouped together
 # Format: "parent:child1,child2,child3"
 # NOTE: Child names must match exact folder names (case-sensitive)
-declare -A PROJECT_GROUPS=(
-    ["CodebaseManager"]="Bakudo,Emeth,Euleri,ImTheMap,MonkeTree,Topolop,Lagrangi"
-    ["ai-benchmark-suite"]="bigcode-evaluation-harness,lm-evaluation-harness,bigcodebench,livecodebench,swebench-live"
-    ["mcp-workspace"]="Adeptus,Adeptus-analytics-server,autogen-unified,claude-telemetry,config-manager-mcp,conversation-search,file-converter,imthemap-mcp-server,layered-memory,metaMCP-RAG,namecheap,token-analyzer,topolop-mcp-server,unity,webby"
-    ["Intention"]="daikon,l2mac,mare,specgen"
-    ["catzen"]="catzen-instance-1,catzen-instance-2,catzen-instance-3,catzen-development,catzen-staging,catzen-reservation-module"
-    ["autogen-local"]="Agent-Visor,Meiosis"
-)
+# These defaults are examples - override in user config
+if [[ -z "${PROJECT_GROUPS:-}" ]]; then
+    declare -A PROJECT_GROUPS=(
+        # Example suite - uncomment and customize in your config:
+        # ["my-platform"]="api-service,web-frontend,mobile-app"
+    )
+fi
 
 # Color codes for pretty output (only set if not already defined)
 if [[ -z "${COLOR_RESET:-}" ]]; then
@@ -72,17 +77,22 @@ discover_git_repos() {
             fi
 
             # Skip specific submodule paths to avoid duplicates with standalone repos
+            # This can be customized in config with EXCLUDE_SUBMODULE_PATTERNS
             local parent_dir=$(dirname "$git_path")
-            case "$parent_dir" in
-                # Exclude open_deep_research submodule (standalone version exists)
-                */Stoma/external/open_deep_research)
+
+            # Skip known nested repos if pattern is set
+            if [[ -n "${EXCLUDE_SUBMODULE_PATTERNS:-}" ]]; then
+                local should_skip=false
+                for pattern in "${EXCLUDE_SUBMODULE_PATTERNS[@]}"; do
+                    if [[ "$parent_dir" == *"$pattern"* ]]; then
+                        should_skip=true
+                        break
+                    fi
+                done
+                if [[ "$should_skip" == true ]]; then
                     continue
-                    ;;
-                # Exclude nested bigcodebench inside livecodebench (duplicate)
-                */livecodebench/bigcodebench)
-                    continue
-                    ;;
-            esac
+                fi
+            fi
 
             # Output the parent directory (the actual repo)
             echo "$parent_dir"
@@ -148,41 +158,31 @@ categorize_project() {
         return
     fi
 
-    # Priority 2: Determine category based on hierarchical path structure
-    if [[ "$path" == *"/projects/Archive/"* ]]; then
-        echo "Archive"
+    # Priority 2: Simple path-based categorization
+    # Extract category from common path patterns
+    local base_dir=$(basename "$(dirname "$path")")
+    local parent_dir=$(basename "$(dirname "$(dirname "$path")")")
 
-    # Extra subcategories
-    elif [[ "$path" == *"/projects/Extra/GAMES/"* ]]; then
-        echo "Extra → GAMES"
-    elif [[ "$path" == *"/projects/Extra/OTHER/"* ]]; then
-        echo "Extra → OTHER"
-    elif [[ "$path" == *"/projects/Extra/"* ]]; then
-        echo "Extra"
-
-    # Utility subcategories
-    elif [[ "$path" == *"/projects/Utility/DEV-TOOLS/"* ]]; then
-        echo "Utility → DEV-TOOLS"
-    elif [[ "$path" == *"/projects/Utility/LOGISTICAL/"* ]]; then
-        echo "Utility → LOGISTICAL"
-    elif [[ "$path" == *"/projects/Utility/MULTI-AGENT/"* ]]; then
-        echo "Utility → MULTI-AGENT"
-    elif [[ "$path" == *"/projects/Utility/RESEARCH/"* ]]; then
-        echo "Utility → RESEARCH"
-    elif [[ "$path" == *"/projects/Utility/"* ]]; then
-        echo "Utility"
-
-    # Work projects
-    elif [[ "$path" == *"/projects/Work/"* ]]; then
+    # Common patterns: ~/projects/CategoryName/project
+    if [[ "$path" == *"/projects/"* ]]; then
+        # Check for nested categories like projects/Type/Subcategory/project
+        if [[ "$base_dir" != "projects" ]]; then
+            if [[ "$parent_dir" != "projects" ]]; then
+                echo "${parent_dir} → ${base_dir}"
+            else
+                echo "$base_dir"
+            fi
+        else
+            echo "Projects"
+        fi
+    # Common patterns: ~/dev/project or ~/work/project
+    elif [[ "$path" == *"/dev/"* ]]; then
+        echo "Development"
+    elif [[ "$path" == *"/work/"* ]]; then
         echo "Work"
-
-    # System Config - home-level dotfile repos
-    elif [[ "$path" == "$HOME/.claude" ]] || [[ "$path" == "$HOME/.system-config" ]]; then
-        echo "System Config"
-
-    # Other locations
-    elif [[ "$path" == *"/.claude/"* ]]; then
-        echo "Claude"
+    # Home-level repos (dotfiles, etc)
+    elif [[ "$(dirname "$path")" == "$HOME" ]]; then
+        echo "Dotfiles"
     else
         echo "Other"
     fi
@@ -219,7 +219,6 @@ discover_projects() {
         # Read from JSON cache - single jq command, no loops!
         # Output format: category|name|path|is_external|is_suite_parent|is_suite_child
         jq -r '.projects[] |
-            select(.name != "open_deep_research") |
             select(.category != "Archive") |
             "\(.category)|\(.name)|\(.path)|\(.is_external)|\(.is_suite_parent)|\(.is_suite_child)"' \
             "$PROJECT_CACHE_JSON" | \
@@ -237,9 +236,11 @@ discover_projects() {
     fi
 
     # Legacy fallback if jq not available
-    local -a excluded_projects=(
-        "open_deep_research"
-    )
+    # User can configure EXCLUDED_PROJECTS in config
+    local -a excluded_projects=()
+    if [[ -n "${EXCLUDED_PROJECTS:-}" ]]; then
+        excluded_projects=("${EXCLUDED_PROJECTS[@]}")
+    fi
 
     local -a projects=()
 
@@ -269,6 +270,7 @@ discover_projects() {
 }
 
 # Check if a repository is external (not managed by user)
+# Can be configured with EXTERNAL_CHECK_PATTERN in config
 is_external_repo() {
     local project_path="$1"
 
@@ -288,11 +290,20 @@ is_external_repo() {
         return
     fi
 
-    # Check if the remote URL contains "cordlesssteve"
-    if [[ "$remote_url" == *"cordlesssteve"* ]]; then
-        echo "false"
+    # Check if user has configured an external check pattern
+    if [[ -n "${EXTERNAL_CHECK_PATTERN:-}" ]]; then
+        if [[ "$remote_url" == *"${EXTERNAL_CHECK_PATTERN}"* ]]; then
+            echo "false"
+        else
+            echo "true"
+        fi
     else
-        echo "true"
+        # Default: check if it's from common external sources
+        if [[ "$remote_url" == *"github.com/"* ]] && [[ "$remote_url" != *"github.com/$USER/"* ]]; then
+            echo "true"
+        else
+            echo "false"
+        fi
     fi
 }
 

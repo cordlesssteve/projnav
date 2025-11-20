@@ -45,14 +45,16 @@ cp ~/.projnav/config/projnav.conf.example ~/.config/projnav/config
 ```bash
 $ projnav
 
-[CATZEN SUITE]
-   28. catzen
-       29. ├─ catzen-instance-1      30. ├─ catzen-instance-2      31. ├─ catzen-reservation-module
+[MY-PLATFORM SUITE]
+   15. my-platform
+       16. ├─ api-service      17. ├─ web-frontend      18. ├─ mobile-app      19. ├─ admin-dashboard
 
-[MCP-WORKSPACE SUITE]
-   48. mcp-workspace
-       49. ├─ Adeptus      50. ├─ Adeptus-analytics-server      51. ├─ autogen-unified
-       54. ├─ file-converter      55. ├─ imthemap-mcp-server      56. ├─ layered-memory
+[DEV-TOOLS SUITE]
+   28. dev-tools
+       29. ├─ cli-tool      30. ├─ vscode-extension      31. ├─ docs-site
+
+[Work]
+   45. client-project-a      46. client-project-b      47. internal-tool
 
 Commands:
   <number>  Navigate to project
@@ -68,8 +70,8 @@ Commands:
 ```bash
 $ projnav -f
 
-# Type partial name: "catres"
-# Instantly finds: catzen-reservation-module
+# Type partial name: "apiser"
+# Instantly finds: my-platform/api-service
 # Press Enter to navigate
 ```
 
