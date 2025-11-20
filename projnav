@@ -1,0 +1,794 @@
+#!/bin/bash
+
+# Project Navigator - Hybrid menu/fuzzy finder for quick project switching
+# Usage: source this script from an alias to change directory in current shell
+
+# Note: We use 'set -u' for undefined variable detection, but NOT 'set -e'
+# to allow graceful error handling and menu looping
+set -uo pipefail
+
+# Determine script directory for portable sourcing
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Source shared project navigation library
+source "${SCRIPT_DIR}/lib/projnav-core.sh"
+
+# Configuration
+FZF_AVAILABLE=false
+
+# Global associative array for pre-loaded descriptions
+declare -gA PROJECT_DESCRIPTIONS
+
+# UI Configuration (global variables for persistence across function calls)
+declare -g TERMINAL_WIDTH=$(tput cols 2>/dev/null || echo 80)
+declare -g TERMINAL_HEIGHT=$(tput lines 2>/dev/null || echo 24)
+# Only set defaults if not already set (allows toggle to persist)
+[[ -z "${SHOW_DESCRIPTIONS:-}" ]] && declare -g SHOW_DESCRIPTIONS=false
+[[ -z "${USE_TWO_COLUMNS:-}" ]] && declare -g USE_TWO_COLUMNS=true
+[[ -z "${SHOW_TAGS:-}" ]] && declare -g SHOW_TAGS=false
+
+# Check if fzf is available
+if command -v fzf &> /dev/null; then
+    FZF_AVAILABLE=true
+fi
+
+# Fuzzy finder mode
+fuzzy_mode() {
+    local projects
+    mapfile -t projects < <(discover_projects)
+
+    if [[ ${#projects[@]} -eq 0 ]]; then
+        echo -e "${COLOR_YELLOW}⚠${COLOR_RESET} No projects found!"
+        return 1
+    fi
+
+    local selected
+    selected=$(printf '%s\n' "${projects[@]}" |
+        awk -F'|' '{printf "[%-10s] %s\n", $1, $2}' |
+        fzf --prompt="Select project: " \
+            --height=40% \
+            --border \
+            --header="Fuzzy search your projects (ESC to cancel)" \
+            --preview="echo {}" \
+            --preview-window=up:3:wrap) || {
+        # User cancelled (ESC or Ctrl+C)
+        echo -e "${COLOR_YELLOW}Cancelled fuzzy search${COLOR_RESET}"
+        return 1
+    }
+
+    if [[ -n "$selected" ]]; then
+        # Extract project path from original data
+        local project_name=$(echo "$selected" | awk '{print $NF}')
+        local project_path=$(printf '%s\n' "${projects[@]}" | grep "|$project_name|" | cut -d'|' -f3)
+
+        if [[ -d "$project_path" ]]; then
+            cd "$project_path" || {
+                echo -e "${COLOR_RED}✗${COLOR_RESET} Failed to change directory to: $project_path"
+                return 1
+            }
+            save_state "$project_path"
+            echo -e "${COLOR_GREEN}✓${COLOR_RESET} Changed to: ${COLOR_CYAN}$project_path${COLOR_RESET}"
+            return 0
+        else
+            echo -e "${COLOR_RED}✗${COLOR_RESET} Directory not found: $project_path"
+            return 1
+        fi
+    else
+        echo -e "${COLOR_YELLOW}No selection made${COLOR_RESET}"
+        return 1
+    fi
+}
+
+# Menu mode
+menu_mode() {
+    local projects
+    mapfile -t projects < <(discover_projects)
+
+    if [[ ${#projects[@]} -eq 0 ]]; then
+        echo -e "${COLOR_YELLOW}⚠${COLOR_RESET} No projects found!"
+        return 1
+    fi
+
+    # Pre-load ALL descriptions with single jq call (eliminates 61 subprocess spawns)
+    if [[ -f "$PROJECT_CACHE_JSON" ]] && command -v jq &>/dev/null; then
+        while IFS='|' read -r proj_path proj_desc; do
+            # Skip empty paths (can happen with malformed JSON)
+            [[ -n "$proj_path" ]] || continue
+            PROJECT_DESCRIPTIONS["$proj_path"]="$proj_desc"
+        done < <(jq -r '.projects[] | "\(.path)|\(.description // "")"' "$PROJECT_CACHE_JSON")
+    fi
+
+    # Loop until valid selection or explicit quit
+    local should_loop=true
+    while [[ "$should_loop" == true ]]; do
+        display_menu "${projects[@]}"
+        local result=$?
+        if [[ $result -eq 0 ]]; then
+            should_loop=false
+        elif [[ $result -eq 2 ]]; then
+            # Re-index requested, refresh projects list and descriptions
+            mapfile -t projects < <(discover_projects)
+            # Reload descriptions after re-index
+            while IFS='|' read -r proj_path proj_desc; do
+                # Skip empty paths (can happen with malformed JSON)
+                [[ -n "$proj_path" ]] || continue
+                PROJECT_DESCRIPTIONS["$proj_path"]="$proj_desc"
+            done < <(jq -r '.projects[] | "\(.path)|\(.description // "")"' "$PROJECT_CACHE_JSON")
+        fi
+        # result=1 means invalid input, loop continues
+    done
+}
+
+# Display the menu and handle user input (extracted for clarity)
+display_menu() {
+    local projects=("$@")
+
+    # Declare project_map and index at function scope (used by both layouts)
+    local -A project_map
+    local index=1
+
+    # Use two-column layout for wide terminals
+    if [[ "$USE_TWO_COLUMNS" == "true" ]]; then
+        # Clear screen
+        clear
+
+        # Print header
+        echo -e "\n${COLOR_BOLD}${COLOR_BLUE}╔═══════════════════════════════════════════════════════════════╗${COLOR_RESET}"
+        echo -e "${COLOR_BOLD}${COLOR_BLUE}║          PROJECT NAVIGATOR v2.2 - TWO COLUMN MODE             ║${COLOR_RESET}"
+        echo -e "${COLOR_BOLD}${COLOR_BLUE}╚═══════════════════════════════════════════════════════════════╝${COLOR_RESET}\n"
+
+        # Custom sort
+        local sorted_projects
+        mapfile -t sorted_projects < <(sort_projects "${projects[@]}")
+
+        # Flatten all projects (including children) into formatted list with category headers
+        local -a flat_list
+        local current_category=""
+
+        for project_data in "${sorted_projects[@]}"; do
+            IFS='|' read -r category project path is_external is_suite_parent is_suite_child <<< "$project_data"
+
+            # Skip if this project is a child (will be added under parent)
+            if is_group_child "$project"; then
+                continue
+            fi
+
+            # Add category header if changed
+            if [[ "$category" != "$current_category" ]]; then
+                flat_list+=("HEADER|$category|||")
+                current_category="$category"
+            fi
+
+            # Determine tag and color for parent/standalone
+            local tag_display="[PROJECT]"
+            local tag_color="\033[1;32m"  # Bright green for regular project
+            local item_type="standalone"
+
+            if is_group_parent "$project"; then
+                tag_display="[SUITE]"
+                tag_color="\033[1;36m"  # Bright cyan for suite
+                item_type="parent"
+            fi
+
+            if [[ "$is_external" == "true" ]]; then
+                tag_display="[EXTERNAL]"
+                tag_color="\033[1;33m"  # Bright yellow for external
+            fi
+
+            # Add project (parent or standalone) with formatting
+            flat_list+=("$index|$project|${tag_color}${tag_display}\033[0m|$item_type")
+            project_map[$index]="$path"
+            ((index++))
+
+            # Add children if suite parent
+            if is_group_parent "$project"; then
+                IFS=',' read -ra children <<< "$(get_group_children "$project")"
+                local child_count=${#children[@]}
+                local child_idx=0
+
+                for child in "${children[@]}"; do
+                    child_idx=$((child_idx + 1))
+
+                    # Determine tree character
+                    local tree_char="├─"
+                    if [[ $child_idx -eq $child_count ]]; then
+                        tree_char="└─"
+                    fi
+
+                    # Look up child info
+                    for child_data in "${sorted_projects[@]}"; do
+                        IFS='|' read -r c_cat c_proj c_path c_ext c_parent c_child <<< "$child_data"
+                        if [[ "$c_proj" == "$child" ]]; then
+                            local child_tag="[PROJECT]"
+                            local child_color="\033[1;32m"
+
+                            if [[ "$c_ext" == "true" ]]; then
+                                child_tag="[EXTERNAL]"
+                                child_color="\033[1;33m"
+                            fi
+
+                            flat_list+=("$index|\033[2m${tree_char}\033[0m $child|${child_color}${child_tag}\033[0m|child")
+                            project_map[$index]="$c_path"
+                            ((index++))
+                            break
+                        fi
+                    done
+                done
+            fi
+        done
+
+        # Calculate widths for better formatting
+        # Each column: number (4) + dot (1) + space (1) + name (flexible) + tag (if shown: 13)
+        local tag_space=0
+        if [[ "$SHOW_TAGS" == "true" ]]; then
+            tag_space=13  # Space for tag display
+        fi
+        local name_width=$(( (TERMINAL_WIDTH - 4) / 2 - tag_space ))
+        local col_width=$(( (TERMINAL_WIDTH - 4) / 2 ))
+
+        # Display horizontally per section
+        local i=0
+        local current_section_header=""
+
+        while [[ $i -lt ${#flat_list[@]} ]]; do
+            IFS='|' read -r idx name tag type <<< "${flat_list[$i]}"
+
+            # If this is a header, print it and collect items for this section
+            if [[ "$idx" == "HEADER" ]]; then
+                current_section_header="$name"
+                echo -e "\n${COLOR_BOLD}${COLOR_CYAN}[$current_section_header]${COLOR_RESET}"
+                ((i++))
+
+                # Collect all items in this section until next header or end
+                local -a section_items=()
+                while [[ $i -lt ${#flat_list[@]} ]]; do
+                    IFS='|' read -r sect_idx sect_name sect_tag sect_type <<< "${flat_list[$i]}"
+
+                    # Break if we hit another header
+                    if [[ "$sect_idx" == "HEADER" ]]; then
+                        break
+                    fi
+
+                    section_items+=("${flat_list[$i]}")
+                    ((i++))
+                done
+
+                # Now display this section's items
+                # Check if first item is a suite parent
+                if [[ ${#section_items[@]} -gt 0 ]]; then
+                    IFS='|' read -r first_idx first_name first_tag first_type <<< "${section_items[0]}"
+
+                    if [[ "$first_type" == "parent" ]]; then
+                        # Suite section: parent on its own line, children with column-aligned wrapping
+                        if [[ "$SHOW_TAGS" == "true" ]]; then
+                            printf "  %3d. %b  %b\n" "$first_idx" "$first_name" "$first_tag"
+                        else
+                            printf "  %3d. %b\n" "$first_idx" "$first_name"
+                        fi
+
+                        # Column-aligned layout with vertical alignment
+                        local indent=21
+                        local -a child_items=()
+                        local -a child_widths=()
+
+                        # Collect all children and their widths
+                        for ((j=1; j<${#section_items[@]}; j++)); do
+                            IFS='|' read -r child_idx child_name child_tag child_type <<< "${section_items[$j]}"
+                            child_items+=("$child_idx|$child_name|$child_tag")
+
+                            # Calculate visible width
+                            local name_visible=$(echo -e "$child_name" | sed 's/\x1b\[[0-9;]*m//g')
+                            local item_width=$((${#child_idx} + 2 + ${#name_visible}))
+                            if [[ "$SHOW_TAGS" == "true" ]]; then
+                                item_width=$((item_width + 2 + 11))
+                            fi
+                            child_widths+=("$item_width")
+                        done
+
+                        # Determine items per row by testing how many fit
+                        local available=$((TERMINAL_WIDTH - indent - 5))
+                        local items_per_row=1
+                        local spacing=6
+
+                        for ((test_cols=1; test_cols<=10; test_cols++)); do
+                            local total_width=0
+                            for ((col=0; col<test_cols; col++)); do
+                                local max_in_col=0
+                                for ((row=0; row * test_cols + col < ${#child_items[@]}; row++)); do
+                                    local idx=$((row * test_cols + col))
+                                    if [[ $idx -lt ${#child_widths[@]} ]]; then
+                                        if [[ ${child_widths[$idx]} -gt $max_in_col ]]; then
+                                            max_in_col=${child_widths[$idx]}
+                                        fi
+                                    fi
+                                done
+                                total_width=$((total_width + max_in_col + spacing))
+                            done
+
+                            if [[ $total_width -le $available ]]; then
+                                items_per_row=$test_cols
+                            else
+                                break
+                            fi
+                        done
+
+                        # Calculate column widths for alignment
+                        local -a col_widths=()
+                        for ((col=0; col<items_per_row; col++)); do
+                            local max_in_col=0
+                            for ((row=0; row * items_per_row + col < ${#child_items[@]}; row++)); do
+                                local idx=$((row * items_per_row + col))
+                                if [[ $idx -lt ${#child_widths[@]} ]]; then
+                                    if [[ ${child_widths[$idx]} -gt $max_in_col ]]; then
+                                        max_in_col=${child_widths[$idx]}
+                                    fi
+                                fi
+                            done
+                            col_widths+=("$max_in_col")
+                        done
+
+                        # Print in column-aligned rows
+                        local num_rows=$(( (${#child_items[@]} + items_per_row - 1) / items_per_row ))
+                        for ((row=0; row<num_rows; row++)); do
+                            printf "%${indent}s" ""
+                            for ((col=0; col<items_per_row; col++)); do
+                                local idx=$((row * items_per_row + col))
+                                if [[ $idx -lt ${#child_items[@]} ]]; then
+                                    IFS='|' read -r c_idx c_name c_tag <<< "${child_items[$idx]}"
+                                    local visible=$(echo -e "$c_name" | sed 's/\x1b\[[0-9;]*m//g')
+                                    local text_len=$((${#c_idx} + 2 + ${#visible}))
+
+                                    if [[ "$SHOW_TAGS" == "true" ]]; then
+                                        printf "%3d. %b  %-11b" "$c_idx" "$c_name" "$c_tag"
+                                        printf "%*s" "$((${col_widths[$col]} - text_len - 13 + spacing))" ""
+                                    else
+                                        printf "%3d. %b" "$c_idx" "$c_name"
+                                        printf "%*s" "$((${col_widths[$col]} - text_len + spacing))" ""
+                                    fi
+                                fi
+                            done
+                            echo ""
+                        done
+                    else
+                        # Normal section: all items horizontal with smart wrapping
+                        local indent_spaces=2
+                        local current_line_width=$indent_spaces
+                        local is_first_line=true
+
+                        for item in "${section_items[@]}"; do
+                            IFS='|' read -r item_idx item_name item_tag item_type <<< "$item"
+
+                            # Calculate item width (remove ANSI codes for accurate calculation)
+                            local name_visible=$(echo -e "$item_name" | sed 's/\x1b\[[0-9;]*m//g')
+                            if [[ "$SHOW_TAGS" == "true" ]]; then
+                                local tag_visible=$(echo -e "$item_tag" | sed 's/\x1b\[[0-9;]*m//g')
+                                local item_width=$((${#item_idx} + 2 + ${#name_visible} + 2 + ${#tag_visible} + 5))
+                            else
+                                local item_width=$((${#item_idx} + 2 + ${#name_visible} + 5))
+                            fi
+
+                            # Check if adding this item would exceed terminal width
+                            if [[ $((current_line_width + item_width)) -gt $((TERMINAL_WIDTH - 5)) && ! "$is_first_line" == true ]]; then
+                                # Start new line with proper indentation
+                                echo ""
+                                printf "%${indent_spaces}s" ""
+                                current_line_width=$indent_spaces
+                            fi
+
+                            # Print first line indentation
+                            if [[ "$is_first_line" == true ]]; then
+                                printf "%${indent_spaces}s" ""
+                                is_first_line=false
+                            fi
+
+                            # Print the item
+                            if [[ "$SHOW_TAGS" == "true" ]]; then
+                                printf "%3d. %b  %b     " "$item_idx" "$item_name" "$item_tag"
+                            else
+                                printf "%3d. %b     " "$item_idx" "$item_name"
+                            fi
+
+                            current_line_width=$((current_line_width + item_width))
+                        done
+                        echo ""
+                    fi
+                fi
+                continue
+            fi
+
+            # If we somehow have items without a header (shouldn't happen), skip
+            ((i++))
+        done
+
+    else
+        # Single column layout
+
+        # Clear screen for clean menu display
+        clear
+
+        # Print header
+        echo -e "\n${COLOR_BOLD}${COLOR_BLUE}╔════════════════════════════════════╗${COLOR_RESET}"
+        echo -e "${COLOR_BOLD}${COLOR_BLUE}║     PROJECT NAVIGATOR v2.2         ║${COLOR_RESET}"
+        echo -e "${COLOR_BOLD}${COLOR_BLUE}╚════════════════════════════════════╝${COLOR_RESET}\n"
+
+        # Custom sort: Work > Utility > Extra > Everything Else (using shared library)
+        local sorted_projects
+        mapfile -t sorted_projects < <(sort_projects "${projects[@]}")
+
+    # Build a lookup map for all projects
+    local -A all_projects_map
+    local max_name_length=0
+    for project_data in "${sorted_projects[@]}"; do
+        IFS='|' read -r category project path is_external is_suite_parent is_suite_child <<< "$project_data"
+        all_projects_map["$project"]="$category|$path|$is_external"
+
+        # Track max project name length for alignment
+        local name_len=${#project}
+        if [[ $name_len -gt $max_name_length ]]; then
+            max_name_length=$name_len
+        fi
+    done
+
+    # Add padding for alignment
+    max_name_length=$((max_name_length + 2))
+
+    # Group projects by category and handle project groups
+    local current_category=""
+    local index=1
+    local -A project_map
+    local -A displayed_projects
+
+    # First pass: identify which group parents are actually present
+    local -A present_parents
+    for project_data in "${sorted_projects[@]}"; do
+        IFS='|' read -r category project path is_external is_suite_parent is_suite_child <<< "$project_data"
+        if is_group_parent "$project"; then
+            present_parents["$project"]=1
+        fi
+    done
+
+    for project_data in "${sorted_projects[@]}"; do
+        IFS='|' read -r category project path is_external is_suite_parent is_suite_child <<< "$project_data"
+
+        # Skip if this project is a child in a group and already displayed
+        if [[ -n "${displayed_projects[$project]:-}" ]]; then
+            continue
+        fi
+
+        # Print category header if changed
+        if [[ "$category" != "$current_category" ]]; then
+            if [[ -n "$current_category" ]]; then
+                echo ""
+            fi
+            echo -e "${COLOR_BOLD}${COLOR_CYAN}[$category]${COLOR_RESET}"
+            current_category="$category"
+        fi
+
+        # Check if this is a group parent
+        if is_group_parent "$project"; then
+            # Print parent project with description
+            local desc="${PROJECT_DESCRIPTIONS[$path]:-}"  # Use pre-loaded description (safe access)
+            local tag_display="[SUITE]"
+            local tag_color="\033[1;36m"  # Bright cyan for suite
+
+            if [[ "$is_external" == "true" ]]; then
+                tag_display="[EXTERNAL]"
+                tag_color="\033[1;33m"  # Bright yellow for external
+            fi
+
+            # Show description based on SHOW_DESCRIPTIONS flag
+            if [[ "$SHOW_DESCRIPTIONS" == "true" && -n "$desc" ]]; then
+                if [[ "$SHOW_TAGS" == "true" ]]; then
+                    printf "%3d. %-${max_name_length}s  ${tag_color}%-11s\033[0m  %s\n" "$index" "$project" "$tag_display" "$desc"
+                else
+                    printf "%3d. %-${max_name_length}s  %s\n" "$index" "$project" "$desc"
+                fi
+            else
+                if [[ "$SHOW_TAGS" == "true" ]]; then
+                    printf "%3d. %-${max_name_length}s  ${tag_color}%-11s\033[0m\n" "$index" "$project" "$tag_display"
+                else
+                    printf "%3d. %-${max_name_length}s\n" "$index" "$project"
+                fi
+            fi
+            project_map[$index]="$path"
+            displayed_projects["$project"]=1
+            ((index++))
+
+            # Print child projects indented
+            IFS=',' read -ra children <<< "$(get_group_children "$project")"
+            local child_count=${#children[@]}
+            local child_idx=0
+            for child in "${children[@]}"; do
+                child_idx=$((child_idx + 1))
+                # Look up child project info
+                if [[ -n "${all_projects_map[$child]:-}" ]]; then
+                    IFS='|' read -r child_cat child_path child_is_external <<< "${all_projects_map[$child]}"
+
+                    # Determine the tree character
+                    local tree_char="├─"
+                    if [[ $child_idx -eq $child_count ]]; then
+                        tree_char="└─"
+                    fi
+
+                    local child_desc="${PROJECT_DESCRIPTIONS[$child_path]:-}"  # Use pre-loaded description (safe access)
+                    local child_tag_display="[PROJECT]"
+                    local child_tag_color="\033[1;32m"  # Bright green for regular project
+
+                    if [[ "$child_is_external" == "true" ]]; then
+                        child_tag_display="[EXTERNAL]"
+                        child_tag_color="\033[1;33m"  # Bright yellow for external
+                    fi
+
+                    # Show description based on SHOW_DESCRIPTIONS flag
+                    if [[ "$SHOW_DESCRIPTIONS" == "true" && -n "$child_desc" ]]; then
+                        if [[ "$SHOW_TAGS" == "true" ]]; then
+                            printf "%3d. \033[2m%s\033[0m %-${max_name_length}s  ${child_tag_color}%-11s\033[0m  %s\n" "$index" "$tree_char" "$child" "$child_tag_display" "$child_desc"
+                        else
+                            printf "%3d. \033[2m%s\033[0m %-${max_name_length}s  %s\n" "$index" "$tree_char" "$child" "$child_desc"
+                        fi
+                    else
+                        if [[ "$SHOW_TAGS" == "true" ]]; then
+                            printf "%3d. \033[2m%s\033[0m %-${max_name_length}s  ${child_tag_color}%-11s\033[0m\n" "$index" "$tree_char" "$child" "$child_tag_display"
+                        else
+                            printf "%3d. \033[2m%s\033[0m %-${max_name_length}s\n" "$index" "$tree_char" "$child"
+                        fi
+                    fi
+                    project_map[$index]="$child_path"
+                    displayed_projects["$child"]=1
+                    ((index++))
+                fi
+            done
+        elif is_group_child "$project"; then
+            # This is a group child - check if its parent is present
+            local parent_name=""
+            for parent in "${!PROJECT_GROUPS[@]}"; do
+                local children="${PROJECT_GROUPS[$parent]}"
+                if [[ ",$children," == *",$project,"* ]]; then
+                    parent_name="$parent"
+                    break
+                fi
+            done
+
+            # If parent is not present in projects list, display as orphaned child
+            if [[ -z "${present_parents[$parent_name]:-}" ]]; then
+                local desc="${PROJECT_DESCRIPTIONS[$path]:-}"  # Use pre-loaded description (safe access)
+                local tag_display="[PROJECT]"
+                local tag_color="\033[1;32m"  # Bright green for regular project
+
+                if [[ "$is_external" == "true" ]]; then
+                    tag_display="[EXTERNAL]"
+                    tag_color="\033[1;33m"  # Bright yellow for external
+                fi
+
+                # Show description based on SHOW_DESCRIPTIONS flag
+                if [[ "$SHOW_DESCRIPTIONS" == "true" && -n "$desc" ]]; then
+                    if [[ "$SHOW_TAGS" == "true" ]]; then
+                        printf "%3d. %-${max_name_length}s  ${tag_color}%-11s\033[0m  %s\n" "$index" "$project" "$tag_display" "$desc"
+                    else
+                        printf "%3d. %-${max_name_length}s  %s\n" "$index" "$project" "$desc"
+                    fi
+                else
+                    if [[ "$SHOW_TAGS" == "true" ]]; then
+                        printf "%3d. %-${max_name_length}s  ${tag_color}%-11s\033[0m\n" "$index" "$project" "$tag_display"
+                    else
+                        printf "%3d. %-${max_name_length}s\n" "$index" "$project"
+                    fi
+                fi
+                project_map[$index]="$path"
+                displayed_projects["$project"]=1
+                ((index++))
+            fi
+            # If parent IS present, skip (will be displayed as child under parent)
+        else
+            # Print standalone project (not a child in any group)
+            local desc="${PROJECT_DESCRIPTIONS[$path]:-}"  # Use pre-loaded description (safe access)
+            local tag_display="[PROJECT]"
+            local tag_color="\033[1;32m"  # Bright green for regular project
+
+            if [[ "$is_external" == "true" ]]; then
+                tag_display="[EXTERNAL]"
+                tag_color="\033[1;33m"  # Bright yellow for external
+            fi
+
+            # Show description based on SHOW_DESCRIPTIONS flag
+            if [[ "$SHOW_DESCRIPTIONS" == "true" && -n "$desc" ]]; then
+                if [[ "$SHOW_TAGS" == "true" ]]; then
+                    printf "%3d. %-${max_name_length}s  ${tag_color}%-11s\033[0m  %s\n" "$index" "$project" "$tag_display" "$desc"
+                else
+                    printf "%3d. %-${max_name_length}s  %s\n" "$index" "$project" "$desc"
+                fi
+            else
+                if [[ "$SHOW_TAGS" == "true" ]]; then
+                    printf "%3d. %-${max_name_length}s  ${tag_color}%-11s\033[0m\n" "$index" "$project" "$tag_display"
+                else
+                    printf "%3d. %-${max_name_length}s\n" "$index" "$project"
+                fi
+            fi
+            project_map[$index]="$path"
+            displayed_projects["$project"]=1
+            ((index++))
+        fi
+    done
+    fi  # End of if/else for two-column vs single-column layout
+
+    # Shared footer and command handling (works for both layouts)
+
+    # Show last used project
+    local last_project=$(load_state)
+    if [[ -n "$last_project" ]]; then
+        echo -e "\n${COLOR_DIM}Last: $(basename "$last_project")${COLOR_RESET}"
+    fi
+
+    # Show options
+    echo -e "\n${COLOR_YELLOW}Options:${COLOR_RESET}"
+    echo "  [1-$((index-1))]  Select project"
+    if [[ "$FZF_AVAILABLE" == true ]]; then
+        echo "  [f]       Fuzzy search"
+    fi
+    echo "  [c]       Toggle columns (currently: $([ "$USE_TWO_COLUMNS" == "true" ] && echo "TWO" || echo "ONE"))"
+    echo "  [t]       Toggle tags (currently: $([ "$SHOW_TAGS" == "true" ] && echo "ON" || echo "OFF"))"
+    echo "  [d#]      Show description for project # (e.g., d49)"
+    echo "  [l]       Last project"
+    echo "  [r]       Re-index projects"
+    echo "  [q]       Quit"
+
+    # Get user input with timeout and better handling
+    echo -n -e "\n${COLOR_GREEN}➜${COLOR_RESET} "
+    read -r choice
+
+    # Trim whitespace
+    choice=$(echo "$choice" | xargs)
+
+    # Handle empty input
+    if [[ -z "$choice" ]]; then
+        echo -e "${COLOR_YELLOW}⚠${COLOR_RESET} No input provided. Try again or press 'q' to quit."
+        sleep 1
+        return 1  # Invalid input, loop again
+    fi
+
+    case "$choice" in
+        q|Q)
+            echo "Cancelled."
+            return 0  # Success, exit loop
+            ;;
+        l|L)
+            if [[ -n "$last_project" ]] && [[ -d "$last_project" ]]; then
+                cd "$last_project" || {
+                    echo -e "${COLOR_RED}✗${COLOR_RESET} Failed to change directory"
+                    sleep 1
+                    return 1
+                }
+                echo -e "${COLOR_GREEN}✓${COLOR_RESET} Changed to: ${COLOR_CYAN}$last_project${COLOR_RESET}"
+                return 0  # Success, exit loop
+            else
+                echo -e "${COLOR_YELLOW}⚠${COLOR_RESET} No last project available"
+                sleep 1
+                return 1  # Invalid, loop again
+            fi
+            ;;
+        c|C)
+            # Toggle column layout
+            if [[ "$USE_TWO_COLUMNS" == "true" ]]; then
+                USE_TWO_COLUMNS=false
+            else
+                USE_TWO_COLUMNS=true
+            fi
+            return 1  # Loop again with new setting
+            ;;
+        t|T)
+            # Toggle tag display
+            if [[ "$SHOW_TAGS" == "true" ]]; then
+                SHOW_TAGS=false
+            else
+                SHOW_TAGS=true
+            fi
+            return 1  # Loop again with new setting
+            ;;
+        d[0-9]*|D[0-9]*)
+            # Show description for specific project (d# command)
+            local project_num="${choice:1}"  # Extract number after 'd'
+            if [[ -n "${project_map[$project_num]:-}" ]]; then
+                local target_path="${project_map[$project_num]}"
+                local project_name=$(basename "$target_path")
+
+                # Fetch full, untruncated description directly from source
+                local full_desc=""
+                local package_json="$target_path/package.json"
+                local readme="$target_path/README.md"
+
+                # Try package.json first
+                if [[ -f "$package_json" ]]; then
+                    full_desc=$(jq -r '.description // empty' "$package_json" 2>/dev/null)
+                fi
+
+                # Fallback to README.md (get first 3 substantial paragraphs)
+                if [[ -z "$full_desc" && -f "$readme" ]]; then
+                    local line_count=0
+                    while IFS= read -r line && [[ $line_count -lt 3 ]]; do
+                        # Skip headers, empty lines, markdown syntax
+                        if [[ "$line" =~ ^#.*$ ]] || [[ -z "$line" ]] || [[ "$line" =~ ^\[.*$ ]] || [[ "$line" =~ ^-+$ ]] || [[ "$line" == \`\`\`* ]] || [[ "$line" =~ ^\<.*$ ]]; then
+                            continue
+                        fi
+                        # Clean and append
+                        local cleaned=$(echo "$line" | sed 's/^[[:space:]]*//' | sed 's/^> //' | sed 's/\*\*//g' | sed 's/__//g' | sed 's/<[^>]*>//g' | tr -d '\r')
+                        if [[ ${#cleaned} -gt 10 ]] && [[ ! "$cleaned" =~ ^[[:space:]]*$ ]]; then
+                            full_desc+="$cleaned "
+                            ((line_count++))
+                        fi
+                    done < "$readme"
+                fi
+
+                [[ -z "$full_desc" ]] && full_desc="No description available"
+
+                echo -e "\n${COLOR_BOLD}${COLOR_CYAN}Project #$project_num: $project_name${COLOR_RESET}"
+                echo -e "${COLOR_DIM}Path: $target_path${COLOR_RESET}"
+                echo -e "\n${COLOR_GREEN}Description:${COLOR_RESET}"
+                echo -e "$full_desc\n"
+                read -p "Press Enter to continue..." -r
+            else
+                echo -e "${COLOR_YELLOW}⚠${COLOR_RESET} Invalid project number: $project_num (valid range: 1-$((index-1)))"
+                sleep 1
+            fi
+            return 1  # Loop again
+            ;;
+        r|R)
+            build_index
+            return 2  # Special code: re-index requested, refresh and loop
+            ;;
+        f|F)
+            if [[ "$FZF_AVAILABLE" == true ]]; then
+                fuzzy_mode
+                local fzf_result=$?
+                if [[ $fzf_result -eq 0 ]]; then
+                    return 0  # Success, exit loop
+                else
+                    return 1  # Cancelled or error, loop again
+                fi
+            else
+                echo -e "${COLOR_YELLOW}⚠${COLOR_RESET} fzf not installed. Install with: sudo apt install fzf"
+                sleep 2
+                return 1  # Invalid, loop again
+            fi
+            ;;
+        [0-9]*)
+            if [[ -n "${project_map[$choice]:-}" ]]; then
+                local target_path="${project_map[$choice]}"
+                cd "$target_path" || {
+                    echo -e "${COLOR_RED}✗${COLOR_RESET} Failed to change directory to: $target_path"
+                    sleep 1
+                    return 1
+                }
+                save_state "$target_path"
+                echo -e "${COLOR_GREEN}✓${COLOR_RESET} Changed to: ${COLOR_CYAN}$target_path${COLOR_RESET}"
+                return 0  # Success, exit loop
+            else
+                echo -e "${COLOR_YELLOW}⚠${COLOR_RESET} Invalid selection: $choice (valid range: 1-$((index-1)))"
+                sleep 1
+                return 1  # Invalid, loop again
+            fi
+            ;;
+        *)
+            echo -e "${COLOR_YELLOW}⚠${COLOR_RESET} Invalid option: '$choice'. Use number, 'c' (toggle columns), 't' (toggle tags), 'd#' (show description), 'f' (fuzzy), 'l' (last), 'r' (re-index), or 'q' (quit)"
+            sleep 1
+            return 1  # Invalid, loop again
+            ;;
+    esac
+}
+
+# Main entry point
+main() {
+    # If fzf flag passed, go straight to fuzzy mode
+    if [[ "${1:-}" == "-f" ]] || [[ "${1:-}" == "--fuzzy" ]]; then
+        if [[ "$FZF_AVAILABLE" == true ]]; then
+            fuzzy_mode
+        else
+            echo -e "${COLOR_YELLOW}⚠${COLOR_RESET} fzf not installed, falling back to menu mode"
+            menu_mode
+        fi
+    else
+        menu_mode
+    fi
+}
+
+# Run it
+main "$@"

@@ -1,0 +1,96 @@
+# projnav Configuration File
+# Copy this to ~/.config/projnav/config and customize for your setup
+
+# ============================================================================
+# SEARCH PATHS
+# ============================================================================
+# Directories where projnav will search for git repositories
+# Add all top-level directories where you keep projects
+
+SEARCH_PATHS=(
+    "$HOME/projects"
+    "$HOME/work"
+    "$HOME/dev"
+    # Add more paths as needed
+)
+
+# Maximum depth to search for repositories (default: 10)
+MAX_DEPTH=10
+
+# ============================================================================
+# PROJECT SUITES (Parent-Child Relationships)
+# ============================================================================
+# Define related projects that should be grouped together as suites
+# Format: ["parent-name"]="child1,child2,child3"
+# Child names must match exact folder names (case-sensitive)
+#
+# Example use cases:
+# - Monorepo with multiple services
+# - Ecosystem of related projects
+# - Project with multiple git worktrees
+# - Multi-instance deployments
+
+declare -A PROJECT_GROUPS=(
+    # Example: Microservices suite
+    # ["my-platform"]="api-service,web-frontend,mobile-app,admin-dashboard"
+
+    # Example: Development tool ecosystem
+    # ["dev-tools"]="cli-tool,vscode-extension,docs-site"
+
+    # Example: Multi-instance deployment
+    # ["my-app"]="my-app-prod,my-app-staging,my-app-dev"
+)
+
+# ============================================================================
+# EXCLUSIONS (Optional)
+# ============================================================================
+# Patterns for directories to exclude from discovery
+# These improve performance by skipping known non-project directories
+
+EXCLUDE_PATTERNS=(
+    "node_modules"
+    ".next"
+    "dist"
+    "build"
+    "coverage"
+    "__pycache__"
+    ".venv"
+)
+
+# ============================================================================
+# CACHE SETTINGS (Optional)
+# ============================================================================
+# Where projnav stores cached project metadata
+
+# Cache directory (default: ~/.config/projnav/cache)
+# CACHE_DIR="$HOME/.config/projnav/cache"
+
+# Cache JSON file for fast lookups
+# PROJECT_CACHE_JSON="$CACHE_DIR/projects.json"
+
+# ============================================================================
+# DISPLAY SETTINGS (Optional)
+# ============================================================================
+# These can be overridden, but usually the defaults are good
+
+# Show project descriptions by default (default: false)
+# SHOW_DESCRIPTIONS=false
+
+# Use two-column layout by default (default: true)
+# USE_TWO_COLUMNS=true
+
+# Show project tags by default (default: false)
+# SHOW_TAGS=false
+
+# ============================================================================
+# NOTES
+# ============================================================================
+#
+# After editing this file:
+# 1. Save it to ~/.config/projnav/config
+# 2. Rebuild the project index: projnav --rebuild
+# 3. Test your configuration: projnav
+#
+# For more help:
+# - See docs/configuration.md
+# - Run: projnav --help

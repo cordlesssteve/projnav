@@ -1,0 +1,27 @@
+# User configuration (don't commit personal configs)
+config/projnav.conf
+*.conf
+!*.conf.example
+
+# Cache files
+.project_index.json
+.projnav_cache/
+
+# Backup files
+*.backup-*
+*.bak
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
