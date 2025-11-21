@@ -3,9 +3,14 @@ config/projnav.conf
 *.conf
 !*.conf.example
 
-# Cache files
+# Cache files (in case they're created locally)
 .project_index.json
 .projnav_cache/
+*-cache.json
+*-index
+*-state
+*-metadata.cache
+project-navigator-*
 
 # Backup files
 *.backup-*
