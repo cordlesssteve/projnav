@@ -12,7 +12,7 @@ Navigate through dozens of projects with visual hierarchy, suite relationships, 
 - 📦 **Suite relationships** - Parent-child project grouping (monorepos, ecosystems)
 - 🎨 **Smart column layout** - Adapts to terminal width with vertical alignment
 - ⚡ **Fast** - JSON caching makes navigation instant even with 100+ projects
-- 🛠️ **Zero dependencies** - Pure bash (fzf optional for fuzzy mode)
+- 🛠️ **Minimal dependencies** - Pure bash with optional enhancements (jq, fzf)
 
 ## Quick Start
 
@@ -28,7 +28,7 @@ projnav -f
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/projnav ~/.projnav
+git clone https://github.com/cordlesssteve/projnav ~/.projnav
 
 # Run installer
 ~/.projnav/install.sh
@@ -111,10 +111,15 @@ See [docs/configuration.md](docs/configuration.md) for details.
 
 ## Requirements
 
+**Required:**
 - Bash 4.0+
 - `tput` (usually pre-installed)
-- `jq` (for caching)
-- `fzf` (optional, for fuzzy search mode)
+
+**Recommended:**
+- `jq` (significantly improves performance with caching)
+
+**Optional:**
+- `fzf` (enables fuzzy search mode)
 
 ## License
 
