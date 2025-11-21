@@ -1,20 +1,19 @@
 #!/bin/bash
 
 # Project Navigator Library - Shared functions for project discovery and navigation
-# Used by both project-navigator.sh (master) and model-interface-selector.sh (ai)
 
 # Configuration (only set if not already defined)
 if [[ -z "${PROJECT_INDEX:-}" ]]; then
-    readonly PROJECT_INDEX="$HOME/.config/project-navigator-index"
+    readonly PROJECT_INDEX="$HOME/.config/projnav/cache/index"
 fi
 if [[ -z "${PROJECT_STATE:-}" ]]; then
-    readonly PROJECT_STATE="$HOME/.config/project-navigator-state"
+    readonly PROJECT_STATE="$HOME/.config/projnav/cache/state"
 fi
 if [[ -z "${PROJECT_METADATA_CACHE:-}" ]]; then
-    readonly PROJECT_METADATA_CACHE="$HOME/.config/project-navigator-metadata.cache"
+    readonly PROJECT_METADATA_CACHE="$HOME/.config/projnav/cache/metadata.cache"
 fi
 if [[ -z "${PROJECT_CACHE_JSON:-}" ]]; then
-    readonly PROJECT_CACHE_JSON="$HOME/.config/project-navigator-cache.json"
+    readonly PROJECT_CACHE_JSON="$HOME/.config/projnav/cache/projects.json"
 fi
 
 # Search configuration for smart git-aware discovery
@@ -41,6 +40,14 @@ if [[ -z "${PROJECT_GROUPS:-}" ]]; then
         # Example suite - uncomment and customize in your config:
         # ["my-platform"]="api-service,web-frontend,mobile-app"
     )
+fi
+
+# Suite sort priority (optional - only needed if you want custom sort order)
+# Suites not listed here will sort alphabetically after listed suites
+# Lower numbers = higher priority (displayed first)
+# Example: SUITE_PRIORITY=(["my-platform"]=1 ["devtools"]=2 ["legacy-project"]=3)
+if [[ -z "${SUITE_PRIORITY:-}" ]]; then
+    declare -A SUITE_PRIORITY=()
 fi
 
 # Color codes for pretty output (only set if not already defined)
@@ -389,14 +396,22 @@ EOF
             "Extra → GAMES")             sort_key="7|$category|$project_name" ;;
             "Extra → OTHER")             sort_key="8|$category|$project_name" ;;
             "Extra")                     sort_key="9|$category|$project_name" ;;
-            # Suite categories sorted alphabetically within suite section
-            "AI-BENCHMARK-SUITE SUITE")  sort_key="Y1|$category|$project_name" ;;
-            "AUTOGEN-LOCAL SUITE")       sort_key="Y2|$category|$project_name" ;;
-            "CATZEN SUITE")              sort_key="Y3|$category|$project_name" ;;
-            "CODEBASEMANAGER SUITE")     sort_key="Y4|$category|$project_name" ;;
-            "INTENTION SUITE")           sort_key="Y5|$category|$project_name" ;;
-            "MCP-WORKSPACE SUITE")       sort_key="Y6|$category|$project_name" ;;
-            *" SUITE")                   sort_key="Y9|$category|$project_name" ;;  # Catch-all for new suites
+            # Suite categories - check for custom priority
+            *" SUITE")
+                # Extract suite name (remove " SUITE" suffix)
+                local suite_base="${category% SUITE}"
+                suite_base="${suite_base,,}"  # Convert to lowercase for lookup
+
+                # Check if suite has custom priority
+                if [[ -n "${SUITE_PRIORITY[$suite_base]:-}" ]]; then
+                    local priority="${SUITE_PRIORITY[$suite_base]}"
+                    # Format priority as Y01, Y02, etc. for proper sorting
+                    printf -v sort_key "Y%02d|%s|%s" "$priority" "$category" "$project_name"
+                else
+                    # No custom priority - sort alphabetically after prioritized suites
+                    sort_key="Y99|$category|$project_name"
+                fi
+                ;;
             "System Config")             sort_key="ZZ|$category|$project_name" ;;
             *)                           sort_key="ZZZ|$category|$project_name" ;;
         esac
@@ -539,14 +554,22 @@ sort_projects() {
             "Extra → GAMES")             echo "7|$category|$project|$path" ;;
             "Extra → OTHER")             echo "8|$category|$project|$path" ;;
             "Extra")                     echo "9|$category|$project|$path" ;;
-            # Suite categories sorted alphabetically within suite section
-            "AI-BENCHMARK-SUITE SUITE")  echo "Y1|$category|$project|$path" ;;
-            "AUTOGEN-LOCAL SUITE")       echo "Y2|$category|$project|$path" ;;
-            "CATZEN SUITE")              echo "Y3|$category|$project|$path" ;;
-            "CODEBASEMANAGER SUITE")     echo "Y4|$category|$project|$path" ;;
-            "INTENTION SUITE")           echo "Y5|$category|$project|$path" ;;
-            "MCP-WORKSPACE SUITE")       echo "Y6|$category|$project|$path" ;;
-            *" SUITE")                   echo "Y9|$category|$project|$path" ;;  # Catch-all for new suites
+            # Suite categories - check for custom priority
+            *" SUITE")
+                # Extract suite name (remove " SUITE" suffix)
+                suite_base="${category% SUITE}"
+                suite_base="${suite_base,,}"  # Convert to lowercase for lookup
+
+                # Check if suite has custom priority
+                if [[ -n "${SUITE_PRIORITY[$suite_base]:-}" ]]; then
+                    priority="${SUITE_PRIORITY[$suite_base]}"
+                    # Format priority as Y01, Y02, etc. for proper sorting
+                    printf "Y%02d|%s|%s|%s\n" "$priority" "$category" "$project" "$path"
+                else
+                    # No custom priority - sort alphabetically after prioritized suites
+                    echo "Y99|$category|$project|$path"
+                fi
+                ;;
             "System Config")             echo "ZZ|$category|$project|$path" ;;
             *)                           echo "ZZZ|$category|$project|$path" ;;
         esac

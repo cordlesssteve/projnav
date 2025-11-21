@@ -42,6 +42,22 @@ declare -A PROJECT_GROUPS=(
 )
 
 # ============================================================================
+# SUITE SORT PRIORITY (Optional)
+# ============================================================================
+# Control the display order of your project suites
+# Lower numbers = displayed first (higher priority)
+# Suites not listed here will sort alphabetically after prioritized suites
+#
+# Example: Show my-platform first, then dev-tools, then everything else
+# declare -A SUITE_PRIORITY=(
+#     ["my-platform"]=1
+#     ["dev-tools"]=2
+#     ["legacy-project"]=3
+# )
+
+declare -A SUITE_PRIORITY=()
+
+# ============================================================================
 # EXCLUSIONS (Optional)
 # ============================================================================
 # Patterns for directories to exclude from discovery
