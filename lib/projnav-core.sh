@@ -289,7 +289,7 @@ is_external_repo() {
 
     # Get the remote origin URL
     local remote_url
-    remote_url=$(cd "$project_path" && git remote get-url origin 2>/dev/null)
+    remote_url=$(git -C "$project_path" remote get-url origin 2>/dev/null)
 
     # If no remote or error, assume it's user-managed
     if [[ -z "$remote_url" ]]; then
