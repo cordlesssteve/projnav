@@ -9,6 +9,9 @@ fi
 if [[ -z "${PROJECT_STATE:-}" ]]; then
     readonly PROJECT_STATE="$HOME/.config/projnav/cache/state"
 fi
+if [[ -z "${PROJECT_HISTORY:-}" ]]; then
+    readonly PROJECT_HISTORY="$HOME/.config/projnav/cache/history"
+fi
 if [[ -z "${PROJECT_METADATA_CACHE:-}" ]]; then
     readonly PROJECT_METADATA_CACHE="$HOME/.config/projnav/cache/metadata.cache"
 fi
@@ -225,8 +228,10 @@ discover_projects() {
     if [[ -f "$PROJECT_CACHE_JSON" ]] && command -v jq &>/dev/null; then
         # Read from JSON cache - single jq command, no loops!
         # Output format: category|name|path|is_external|is_suite_parent|is_suite_child
+        # Filter out Archive category and .disabled projects
         jq -r '.projects[] |
             select(.category != "Archive") |
+            select(.name | test("\\.disabled$") | not) |
             "\(.category)|\(.name)|\(.path)|\(.is_external)|\(.is_suite_parent)|\(.is_suite_child)"' \
             "$PROJECT_CACHE_JSON" | \
         sort -t'|' -k1,1 -k2,2 -k3,3
@@ -255,6 +260,9 @@ discover_projects() {
         [[ -z "$path" ]] && continue
 
         local project=$(basename "$path")
+
+        # Skip .disabled projects
+        [[ "$project" == *.disabled ]] && continue
 
         local excluded=false
         for excluded_name in "${excluded_projects[@]}"; do
@@ -580,11 +588,24 @@ sort_projects() {
 # STATE MANAGEMENT
 # ============================================================================
 
-# Save last selected project
+# Save last selected project and update history
 save_state() {
     local project_path="$1"
     mkdir -p "$(dirname "$PROJECT_STATE")"
     echo "$project_path" > "$PROJECT_STATE"
+
+    # Update history (keep last 3 unique projects)
+    local temp_history=$(mktemp)
+
+    # Add current selection to top
+    echo "$project_path" > "$temp_history"
+
+    # Add previous entries if they're different
+    if [[ -f "$PROJECT_HISTORY" ]]; then
+        grep -v "^${project_path}$" "$PROJECT_HISTORY" | head -n 2 >> "$temp_history"
+    fi
+
+    mv "$temp_history" "$PROJECT_HISTORY"
 }
 
 # Load last selected project
@@ -592,4 +613,23 @@ load_state() {
     if [[ -f "$PROJECT_STATE" ]]; then
         cat "$PROJECT_STATE"
     fi
+}
+
+# Load recent project history
+# Returns: project_path|project_name|index (one per line)
+# Note: This function is called within display_menu where project_map is already built
+# So we receive the project_map as a parameter for accurate index lookup
+load_recent_history() {
+    if [[ ! -f "$PROJECT_HISTORY" ]]; then
+        return
+    fi
+
+    # Read history and output with project names
+    # Indices will be computed in display_menu using its project_map
+    while IFS= read -r project_path; do
+        if [[ -d "$project_path" ]]; then
+            local project_name=$(basename "$project_path")
+            echo "$project_path|$project_name"
+        fi
+    done < "$PROJECT_HISTORY"
 }
