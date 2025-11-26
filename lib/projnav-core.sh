@@ -18,8 +18,8 @@ load_config() {
     local YQ_CMD=""
     if command -v yq &>/dev/null; then
         YQ_CMD="yq"
-    elif command -v ~/bin/yq &>/dev/null; then
-        YQ_CMD="~/bin/yq"
+    elif command -v "$HOME/bin/yq" &>/dev/null; then
+        YQ_CMD="$HOME/bin/yq"
     fi
 
     # Try loading YAML config first (v2.0+ format)

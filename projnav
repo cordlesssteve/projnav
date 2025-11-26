@@ -865,11 +865,164 @@ display_menu() {
     esac
 }
 
+# Config validation
+validate_config() {
+    echo -e "${COLOR_BOLD}${COLOR_BLUE}Validating projnav configuration...${COLOR_RESET}\n"
+
+    local has_errors=false
+
+    # Check for config files
+    if [[ -f "$YAML_CONFIG" ]]; then
+        echo -e "${COLOR_GREEN}✓${COLOR_RESET} Found YAML config: $YAML_CONFIG"
+
+        # Check for yq
+        if ! command -v yq &>/dev/null && ! command -v ~/bin/yq &>/dev/null; then
+            echo -e "${COLOR_RED}✗${COLOR_RESET} yq not found - YAML config cannot be parsed"
+            echo -e "  ${COLOR_DIM}Install: wget -qO ~/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && chmod +x ~/bin/yq${COLOR_RESET}"
+            has_errors=true
+        else
+            # Validate YAML syntax
+            local yq_cmd="yq"
+            if command -v "$HOME/bin/yq" &>/dev/null; then
+                yq_cmd="$HOME/bin/yq"
+            fi
+
+            if $yq_cmd eval '.' "$YAML_CONFIG" >/dev/null 2>&1; then
+                echo -e "${COLOR_GREEN}✓${COLOR_RESET} YAML syntax valid"
+
+                # Check required fields
+                local version=$($yq_cmd eval '.version' "$YAML_CONFIG" 2>/dev/null)
+                if [[ "$version" != "null" ]]; then
+                    echo -e "${COLOR_GREEN}✓${COLOR_RESET} Config version: $version"
+                else
+                    echo -e "${COLOR_YELLOW}⚠${COLOR_RESET} No version specified (non-critical)"
+                fi
+
+                # Check search paths
+                local path_count=$($yq_cmd eval '.discovery.search_paths | length' "$YAML_CONFIG" 2>/dev/null)
+                if [[ "$path_count" != "null" && "$path_count" -gt 0 ]]; then
+                    echo -e "${COLOR_GREEN}✓${COLOR_RESET} Search paths defined: $path_count"
+                else
+                    echo -e "${COLOR_YELLOW}⚠${COLOR_RESET} No search paths defined"
+                fi
+
+                # Check suites
+                local suite_count=$($yq_cmd eval '.suites | length' "$YAML_CONFIG" 2>/dev/null)
+                if [[ "$suite_count" != "null" && "$suite_count" -gt 0 ]]; then
+                    echo -e "${COLOR_GREEN}✓${COLOR_RESET} Suites defined: $suite_count"
+                fi
+            else
+                echo -e "${COLOR_RED}✗${COLOR_RESET} YAML syntax errors detected"
+                $yq_cmd eval '.' "$YAML_CONFIG" 2>&1
+                has_errors=true
+            fi
+        fi
+    elif [[ -f "$BASH_CONFIG" ]]; then
+        echo -e "${COLOR_GREEN}✓${COLOR_RESET} Found Bash config: $BASH_CONFIG"
+        echo -e "${COLOR_DIM}  Consider migrating to YAML format for more features${COLOR_RESET}"
+    else
+        echo -e "${COLOR_YELLOW}⚠${COLOR_RESET} No config file found - using defaults"
+    fi
+
+    # Check cache directory
+    if [[ -d "${CONFIG_DIR}/cache" ]]; then
+        echo -e "${COLOR_GREEN}✓${COLOR_RESET} Cache directory exists"
+    else
+        echo -e "${COLOR_YELLOW}⚠${COLOR_RESET} Cache directory missing (will be created)"
+    fi
+
+    echo ""
+    if [[ "$has_errors" == "true" ]]; then
+        echo -e "${COLOR_RED}Configuration has errors${COLOR_RESET}"
+        return 1
+    else
+        echo -e "${COLOR_GREEN}Configuration is valid${COLOR_RESET}"
+        return 0
+    fi
+}
+
+# Show effective configuration
+show_config() {
+    echo -e "${COLOR_BOLD}${COLOR_BLUE}Effective Configuration:${COLOR_RESET}\n"
+
+    echo -e "${COLOR_CYAN}Search Paths:${COLOR_RESET}"
+    for path in "${SEARCH_PATHS[@]}"; do
+        echo "  - $path"
+    done
+
+    echo -e "\n${COLOR_CYAN}Project Groups:${COLOR_RESET}"
+    if [[ ${#PROJECT_GROUPS[@]} -gt 0 ]]; then
+        for suite in "${!PROJECT_GROUPS[@]}"; do
+            echo "  - $suite: ${PROJECT_GROUPS[$suite]}"
+        done
+    else
+        echo "  (none defined)"
+    fi
+
+    echo -e "\n${COLOR_CYAN}Settings:${COLOR_RESET}"
+    echo "  Max Depth: ${MAX_DEPTH:-10}"
+    echo "  Two Columns: ${USE_TWO_COLUMNS:-true}"
+    echo "  Show Tags: ${SHOW_TAGS:-false}"
+    echo "  Show Descriptions: ${SHOW_DESCRIPTIONS:-false}"
+
+    if [[ -n "${EXTERNAL_CHECK_PATTERN:-}" ]]; then
+        echo "  External Pattern: $EXTERNAL_CHECK_PATTERN"
+    fi
+}
+
 # Main entry point
 main() {
+    # Handle help flag
+    if [[ "${1:-}" == "-h" ]] || [[ "${1:-}" == "--help" ]]; then
+        echo "projnav - Git Project Navigator"
+        echo ""
+        echo "Usage: projnav [OPTIONS]"
+        echo ""
+        echo "Options:"
+        echo "  -f, --fuzzy           Fuzzy search mode (requires fzf)"
+        echo "  -v, --version         Show version"
+        echo "  -h, --help            Show this help"
+        echo "  --validate-config     Validate configuration"
+        echo "  --show-config         Show effective configuration"
+        echo "  --rebuild             Rebuild project index"
+        echo ""
+        echo "Interactive Commands:"
+        echo "  [1-N]    Select project by number"
+        echo "  [f]      Fuzzy search"
+        echo "  [c]      Toggle column layout"
+        echo "  [t]      Toggle tags display"
+        echo "  [d#]     Show description for project #"
+        echo "  [l]      Jump to last project"
+        echo "  [r]      Re-index projects"
+        echo "  [q]      Quit"
+        echo ""
+        echo "Config:"
+        echo "  YAML: ~/.config/projnav/projnav.yaml (preferred)"
+        echo "  Bash: ~/.config/projnav/config (legacy)"
+        return 0
+    fi
+
     # Handle version flag
     if [[ "${1:-}" == "-v" ]] || [[ "${1:-}" == "--version" ]]; then
         echo "projnav version $VERSION"
+        return 0
+    fi
+
+    # Handle config validation
+    if [[ "${1:-}" == "--validate-config" ]]; then
+        validate_config
+        return $?
+    fi
+
+    # Handle show config
+    if [[ "${1:-}" == "--show-config" ]]; then
+        show_config
+        return 0
+    fi
+
+    # Handle rebuild
+    if [[ "${1:-}" == "--rebuild" ]]; then
+        build_index
         return 0
     fi
 
