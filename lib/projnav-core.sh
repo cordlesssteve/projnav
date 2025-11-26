@@ -2,6 +2,117 @@
 
 # Project Navigator Library - Shared functions for project discovery and navigation
 
+# ============================================================================
+# CONFIGURATION LOADING
+# ============================================================================
+
+# Config file paths
+readonly CONFIG_DIR="$HOME/.config/projnav"
+readonly YAML_CONFIG="$CONFIG_DIR/projnav.yaml"
+readonly BASH_CONFIG="$CONFIG_DIR/config"
+
+# Load configuration from YAML or Bash file
+# YAML takes precedence if both exist
+load_config() {
+    # Check for yq availability
+    local YQ_CMD=""
+    if command -v yq &>/dev/null; then
+        YQ_CMD="yq"
+    elif command -v ~/bin/yq &>/dev/null; then
+        YQ_CMD="~/bin/yq"
+    fi
+
+    # Try loading YAML config first (v2.0+ format)
+    if [[ -f "$YAML_CONFIG" && -n "$YQ_CMD" ]]; then
+        load_yaml_config "$YQ_CMD"
+        return 0
+    fi
+
+    # Fall back to Bash config (v1.x format)
+    if [[ -f "$BASH_CONFIG" ]]; then
+        source "$BASH_CONFIG"
+        return 0
+    fi
+
+    # No config file found - use defaults
+    return 1
+}
+
+# Parse YAML config and set variables
+load_yaml_config() {
+    local yq="$1"
+
+    # Helper: Read array from YAML
+    read_yaml_array() {
+        local path="$1"
+        $yq eval "$path | .[]" "$YAML_CONFIG" 2>/dev/null
+    }
+
+    # Helper: Read value from YAML
+    read_yaml_value() {
+        local path="$1"
+        local default="$2"
+        local value=$($yq eval "$path" "$YAML_CONFIG" 2>/dev/null)
+        if [[ "$value" != "null" && -n "$value" ]]; then
+            echo "$value"
+        else
+            echo "$default"
+        fi
+    }
+
+    # Load discovery settings
+    if [[ -z "${SEARCH_PATHS:-}" ]]; then
+        mapfile -t SEARCH_PATHS < <(read_yaml_array ".discovery.search_paths")
+    fi
+
+    if [[ -z "${MAX_DEPTH:-}" ]]; then
+        MAX_DEPTH=$(read_yaml_value ".discovery.max_depth" "10")
+    fi
+
+    if [[ -z "${EXCLUDE_PATTERNS:-}" ]]; then
+        mapfile -t EXCLUDE_PATTERNS < <(read_yaml_array ".discovery.exclude_patterns")
+    fi
+
+    # Load suites (convert YAML to PROJECT_GROUPS format)
+    if [[ -z "${PROJECT_GROUPS:-}" ]]; then
+        declare -gA PROJECT_GROUPS
+        local suite_count=$($yq eval '.suites | length' "$YAML_CONFIG" 2>/dev/null)
+        if [[ "$suite_count" != "null" && "$suite_count" -gt 0 ]]; then
+            for ((i=0; i<suite_count; i++)); do
+                local suite_name=$($yq eval ".suites[$i].name" "$YAML_CONFIG" 2>/dev/null)
+                local projects=$($yq eval ".suites[$i].projects | join(\",\")" "$YAML_CONFIG" 2>/dev/null)
+                if [[ -n "$suite_name" && -n "$projects" && "$projects" != "null" ]]; then
+                    PROJECT_GROUPS["$suite_name"]="$projects"
+                fi
+            done
+        fi
+    fi
+
+    # Load external check pattern
+    if [[ -z "${EXTERNAL_CHECK_PATTERN:-}" ]]; then
+        EXTERNAL_CHECK_PATTERN=$(read_yaml_value ".discovery.external_check_pattern" "")
+    fi
+
+    # Load display settings
+    if [[ -z "${SHOW_TAGS:-}" ]]; then
+        local show_tags=$(read_yaml_value ".display.show_tags" "false")
+        [[ "$show_tags" == "true" ]] && SHOW_TAGS=true || SHOW_TAGS=false
+    fi
+
+    if [[ -z "${USE_TWO_COLUMNS:-}" ]]; then
+        local mode=$(read_yaml_value ".display.default_mode" "two_column")
+        [[ "$mode" == "two_column" ]] && USE_TWO_COLUMNS=true || USE_TWO_COLUMNS=false
+    fi
+
+    if [[ -z "${SHOW_DESCRIPTIONS:-}" ]]; then
+        local show_desc=$(read_yaml_value ".display.show_descriptions" "false")
+        [[ "$show_desc" == "true" ]] && SHOW_DESCRIPTIONS=true || SHOW_DESCRIPTIONS=false
+    fi
+}
+
+# Load config on library source
+load_config
+
 # Configuration (only set if not already defined)
 if [[ -z "${PROJECT_INDEX:-}" ]]; then
     readonly PROJECT_INDEX="$HOME/.config/projnav/cache/index"

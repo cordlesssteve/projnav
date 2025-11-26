@@ -1,0 +1,304 @@
+# projnav Configuration (YAML)
+# This is the new, more powerful configuration format
+# Copy to ~/.config/projnav/projnav.yaml and customize
+
+version: "2.0"
+
+# ============================================================================
+# DISCOVERY SETTINGS
+# ============================================================================
+
+discovery:
+  # Base paths to search for projects
+  search_paths:
+    - ~/projects
+    - ~/mcp-servers
+    - ~/.claude
+    - ~/.system-config
+
+  # Maximum depth for recursive search
+  max_depth: 10
+
+  # Directory patterns to exclude from search
+  exclude_patterns:
+    - node_modules
+    - .next
+    - dist
+    - build
+    - coverage
+    - __pycache__
+    - .venv
+    - .git
+    - target
+    - out
+
+  # Only search directories matching these patterns (optional)
+  # If empty, searches all directories
+  include_patterns: []
+
+  # Exclude specific project names (exact match)
+  exclude_projects:
+    - temp-project
+    - old-backup
+
+  # Auto-discover git worktrees as separate projects
+  discover_worktrees: true
+
+  # Pattern to identify your own repos (others marked as [EXTERNAL])
+  external_check_pattern: "cordlesssteve"
+
+# ============================================================================
+# PROJECT GROUPINGS (SUITES)
+# ============================================================================
+
+# Define hierarchical project relationships
+# These create visual groupings in the navigator
+suites:
+  # Work Projects
+  - name: connoisseur
+    category: Work
+    description: "Connoisseur platform and all instances"
+    projects:
+      - connoisseur-main
+      - connoisseur-development
+      - connoisseur-staging
+      - connoisseur-instance-1
+      - connoisseur-instance-2
+      - connoisseur-instance-3
+
+  - name: catzen
+    category: Work
+    description: "Catzen reservation system"
+    projects:
+      - catzen-instance-1
+      - catzen-instance-2
+      - catzen-instance-3
+      - catzen-development
+      - catzen-staging
+      - catzen-reservation-module
+
+  # Development Tools
+  - name: CodebaseManager
+    category: "Utility → DEV-TOOLS"
+    description: "Meta-orchestrator for development services"
+    projects:
+      - Bakudo
+      - Emeth
+      - Euleri
+      - ImTheMap
+      - MonkeTree
+      - Topolop
+      - Lagrangi
+
+  - name: mcp-workspace
+    category: "Utility → DEV-TOOLS"
+    description: "MCP server development workspace"
+    projects:
+      - autogen-unified
+      - claude-telemetry
+      - config-manager-mcp
+      - conversation-search
+      - file-converter
+      - imthemap-mcp-server
+      - layered-memory
+      - namecheap
+      - token-analyzer
+      - topolop-mcp-server
+      - unity
+      - webby
+
+  - name: ai-benchmark-suite
+    category: "Utility → DEV-TOOLS"
+    description: "AI model evaluation harnesses"
+    projects:
+      - bigcode-evaluation-harness
+      - lm-evaluation-harness
+      - bigcodebench
+      - livecodebench
+      - swebench-live
+
+  # Multi-Agent Systems
+  - name: autogen-local
+    category: "Utility → MULTI-AGENT"
+    description: "Local autogen framework components"
+    projects:
+      - Agent-Visor
+      - Meiosis
+
+  # Research & Ideation
+  - name: Intention
+    category: "Extra → OTHER"
+    description: "Intent framework and components"
+    projects:
+      - daikon
+      - l2mac
+      - mare
+      - specgen
+
+# ============================================================================
+# CUSTOM CATEGORIES
+# ============================================================================
+
+# Define category hierarchy and display order
+# Categories appear in this order in the navigator
+categories:
+  - name: Work
+    priority: 1
+    color: cyan
+    description: "Client and production projects"
+
+  - name: "Utility → DEV-TOOLS"
+    priority: 2
+    color: blue
+    description: "Development tooling and utilities"
+
+  - name: "Utility → MULTI-AGENT"
+    priority: 3
+    color: blue
+    description: "Multi-agent systems and frameworks"
+
+  - name: "Utility → RESEARCH"
+    priority: 4
+    color: blue
+    description: "Research and experimental projects"
+
+  - name: "Extra → GAMES"
+    priority: 5
+    color: magenta
+    description: "Game development projects"
+
+  - name: "Extra → OTHER"
+    priority: 6
+    color: green
+    description: "Miscellaneous projects"
+
+# ============================================================================
+# PROJECT-SPECIFIC RULES
+# ============================================================================
+
+# Define custom rules for specific projects
+project_rules:
+  # Pattern-based rules (regex supported)
+  - pattern: ".*-instance-[0-9]+"
+    category: "AUTO"  # Auto-assign based on parent
+    tag: "INSTANCE"
+    color: yellow
+
+  - pattern: ".*-staging$"
+    category: "AUTO"
+    tag: "STAGING"
+    color: yellow
+
+  - pattern: ".*-development$"
+    category: "AUTO"
+    tag: "DEV"
+    color: cyan
+
+  # Explicit project rules (exact match)
+  - project: projnav
+    category: "Utility → DEV-TOOLS"
+    tag: "ACTIVE"
+    color: green
+    pin: true  # Always show at top
+
+  - project: CodebaseManager
+    category: "Utility → DEV-TOOLS"
+    tag: "SUITE"
+    color: cyan
+
+# ============================================================================
+# PROJECT METADATA
+# ============================================================================
+
+# Custom metadata for projects (used in descriptions, search, etc.)
+metadata:
+  - project: connoisseur
+    description: "Restaurant recommendation platform"
+    tech_stack: ["TypeScript", "Next.js", "PostgreSQL"]
+    status: production
+
+  - project: projnav
+    description: "Git project navigation tool"
+    tech_stack: ["Bash"]
+    status: active-development
+
+  - project: layered-memory
+    description: "Hierarchical memory system for AI agents"
+    tech_stack: ["TypeScript", "ChromaDB"]
+    status: active-development
+
+# ============================================================================
+# DISPLAY SETTINGS
+# ============================================================================
+
+display:
+  # Default display mode
+  default_mode: two_column  # Options: single_column, two_column
+
+  # Show tags by default
+  show_tags: false
+
+  # Show project descriptions
+  show_descriptions: false
+
+  # Number of recent projects to show in header
+  recent_projects_count: 3
+
+  # Color scheme
+  colors:
+    header: blue
+    category: cyan
+    suite_tag: cyan
+    project_tag: green
+    external_tag: yellow
+    instance_tag: magenta
+    error: red
+    warning: yellow
+    success: green
+
+  # Tree characters for suite children
+  tree_chars:
+    branch: "├─"
+    last: "└─"
+    indent: "   "
+
+  # Enable fuzzy search if fzf available
+  enable_fuzzy: true
+
+# ============================================================================
+# CACHE SETTINGS
+# ============================================================================
+
+cache:
+  # Enable caching for faster startup
+  enabled: true
+
+  # Cache directory
+  directory: ~/.config/projnav/cache
+
+  # Cache expiry (in seconds)
+  # Set to 0 to never expire, -1 to disable cache
+  expiry: 3600  # 1 hour
+
+  # Use JSON for cache storage
+  use_json: true
+
+# ============================================================================
+# ADVANCED SETTINGS
+# ============================================================================
+
+advanced:
+  # Enable performance profiling
+  profile: false
+
+  # Verbose logging
+  verbose: false
+
+  # Strict mode (fail on config errors)
+  strict: true
+
+  # Enable git status indicators (slower)
+  git_status: false
+
+  # Parallel project discovery (faster but uses more resources)
+  parallel_discovery: true
