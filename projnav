@@ -3,7 +3,7 @@
 # Project Navigator - Hybrid menu/fuzzy finder for quick project switching
 # Usage: source this script from an alias to change directory in current shell
 
-readonly VERSION="1.0.1"
+readonly VERSION="2.3.0"
 
 # Note: We use 'set -u' for undefined variable detection, but NOT 'set -e'
 # to allow graceful error handling and menu looping
