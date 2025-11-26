@@ -184,6 +184,11 @@ display_menu() {
                 local child_idx=0
 
                 for child in "${children[@]}"; do
+                    # Skip if child has same name as parent (avoid duplication)
+                    if [[ "$child" == "$project" ]]; then
+                        continue
+                    fi
+
                     child_idx=$((child_idx + 1))
 
                     # Determine tree character

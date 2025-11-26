@@ -73,6 +73,10 @@ load_yaml_config() {
         mapfile -t EXCLUDE_PATTERNS < <(read_yaml_array ".discovery.exclude_patterns")
     fi
 
+    if [[ -z "${EXCLUDE_SUBMODULE_PATTERNS:-}" ]]; then
+        mapfile -t EXCLUDE_SUBMODULE_PATTERNS < <(read_yaml_array ".discovery.exclude_paths")
+    fi
+
     # Load suites (convert YAML to PROJECT_GROUPS format)
     if [[ -z "${PROJECT_GROUPS:-}" ]]; then
         declare -gA PROJECT_GROUPS
@@ -149,7 +153,7 @@ fi
 # Format: "parent:child1,child2,child3"
 # NOTE: Child names must match exact folder names (case-sensitive)
 # These defaults are examples - override in user config
-if [[ -z "${PROJECT_GROUPS:-}" ]]; then
+if [[ ${#PROJECT_GROUPS[@]} -eq 0 ]]; then
     declare -A PROJECT_GROUPS=(
         # Example suite - uncomment and customize in your config:
         # ["my-platform"]="api-service,web-frontend,mobile-app"
@@ -228,10 +232,12 @@ build_index() {
 
     # Search each configured path
     for search_path in "${SEARCH_PATHS[@]}"; do
-        if [[ -d "$search_path" ]]; then
+        # Expand tilde for paths like ~/projects
+        eval expanded_path="$search_path"
+        if [[ -d "$expanded_path" ]]; then
             while IFS= read -r repo; do
                 [[ -n "$repo" ]] && all_repos+=("$repo")
-            done < <(discover_git_repos "$search_path")
+            done < <(discover_git_repos "$expanded_path")
         fi
     done
 
@@ -262,16 +268,16 @@ categorize_project() {
         echo "${project_name^^} SUITE"
         return
     fi
-    if is_group_child "$project_name"; then
-        # Find the parent and use its suite category
-        for parent in "${!PROJECT_GROUPS[@]}"; do
-            local children="${PROJECT_GROUPS[$parent]}"
-            if [[ ",$children," == *",$project_name,"* ]]; then
-                echo "${parent^^} SUITE"
-                return
-            fi
-        done
-    fi
+
+    # Check if project is in ANY suite's children list (regardless of parent existence)
+    # This ensures suite members get the right category even for "collection suites"
+    for parent in "${!PROJECT_GROUPS[@]}"; do
+        local children="${PROJECT_GROUPS[$parent]}"
+        if [[ ",$children," == *",$project_name,"* ]]; then
+            echo "${parent^^} SUITE"
+            return
+        fi
+    done
 
     # Priority 1: Archive folder takes precedence over everything
     if [[ "$path" == *"/archive/"* ]] || [[ "$path" == *"/Archive/"* ]]; then
@@ -318,10 +324,35 @@ is_group_parent() {
 # Check if a project is a group child
 is_group_child() {
     local project_name="$1"
+
+    # If the project IS a parent itself, it's not a child
+    if is_group_parent "$project_name"; then
+        return 1
+    fi
+
     for parent in "${!PROJECT_GROUPS[@]}"; do
         local children="${PROJECT_GROUPS[$parent]}"
         if [[ ",$children," == *",$project_name,"* ]]; then
-            return 0
+            # Found in a parent's children list
+            # Check if this is a real suite (parent project exists) or collection suite (no parent)
+            # Real suites have children whose names match/start with the parent name
+            local has_parent_project=false
+            IFS=',' read -ra child_array <<< "$children"
+            for child in "${child_array[@]}"; do
+                # If any child name matches parent or starts with parent prefix
+                if [[ "$child" == "$parent" ]] || [[ "$child" == "$parent-"* ]]; then
+                    has_parent_project=true
+                    break
+                fi
+            done
+
+            if [[ "$has_parent_project" == true ]]; then
+                # Real suite with parent project - this IS a child
+                return 0
+            else
+                # Collection suite with no parent - treat as standalone
+                return 1
+            fi
         fi
     done
     return 1
@@ -662,17 +693,17 @@ get_project_description() {
 sort_projects() {
     local -a input_projects=("$@")
 
-    printf '%s\n' "${input_projects[@]}" | while IFS='|' read -r category project path; do
+    printf '%s\n' "${input_projects[@]}" | while IFS='|' read -r category project path is_external is_suite_parent is_suite_child; do
         case "$category" in
-            "Work")                      echo "1|$category|$project|$path" ;;
-            "Utility → DEV-TOOLS")       echo "2|$category|$project|$path" ;;
-            "Utility → LOGISTICAL")      echo "3|$category|$project|$path" ;;
-            "Utility → MULTI-AGENT")     echo "4|$category|$project|$path" ;;
-            "Utility → RESEARCH")        echo "5|$category|$project|$path" ;;
-            "Utility")                   echo "6|$category|$project|$path" ;;
-            "Extra → GAMES")             echo "7|$category|$project|$path" ;;
-            "Extra → OTHER")             echo "8|$category|$project|$path" ;;
-            "Extra")                     echo "9|$category|$project|$path" ;;
+            "Work")                      echo "1|$category|$project|$path|$is_external|$is_suite_parent|$is_suite_child" ;;
+            "Utility → DEV-TOOLS")       echo "2|$category|$project|$path|$is_external|$is_suite_parent|$is_suite_child" ;;
+            "Utility → LOGISTICAL")      echo "3|$category|$project|$path|$is_external|$is_suite_parent|$is_suite_child" ;;
+            "Utility → MULTI-AGENT")     echo "4|$category|$project|$path|$is_external|$is_suite_parent|$is_suite_child" ;;
+            "Utility → RESEARCH")        echo "5|$category|$project|$path|$is_external|$is_suite_parent|$is_suite_child" ;;
+            "Utility")                   echo "6|$category|$project|$path|$is_external|$is_suite_parent|$is_suite_child" ;;
+            "Extra → GAMES")             echo "7|$category|$project|$path|$is_external|$is_suite_parent|$is_suite_child" ;;
+            "Extra → OTHER")             echo "8|$category|$project|$path|$is_external|$is_suite_parent|$is_suite_child" ;;
+            "Extra")                     echo "9|$category|$project|$path|$is_external|$is_suite_parent|$is_suite_child" ;;
             # Suite categories - check for custom priority
             *" SUITE")
                 # Extract suite name (remove " SUITE" suffix)
@@ -683,14 +714,14 @@ sort_projects() {
                 if [[ -n "${SUITE_PRIORITY[$suite_base]:-}" ]]; then
                     priority="${SUITE_PRIORITY[$suite_base]}"
                     # Format priority as Y01, Y02, etc. for proper sorting
-                    printf "Y%02d|%s|%s|%s\n" "$priority" "$category" "$project" "$path"
+                    printf "Y%02d|%s|%s|%s|%s|%s|%s\n" "$priority" "$category" "$project" "$path" "$is_external" "$is_suite_parent" "$is_suite_child"
                 else
                     # No custom priority - sort alphabetically after prioritized suites
-                    echo "Y99|$category|$project|$path"
+                    echo "Y99|$category|$project|$path|$is_external|$is_suite_parent|$is_suite_child"
                 fi
                 ;;
-            "System Config")             echo "ZZ|$category|$project|$path" ;;
-            *)                           echo "ZZZ|$category|$project|$path" ;;
+            "System Config")             echo "ZZ|$category|$project|$path|$is_external|$is_suite_parent|$is_suite_child" ;;
+            *)                           echo "ZZZ|$category|$project|$path|$is_external|$is_suite_parent|$is_suite_child" ;;
         esac
     done | sort -t'|' -k1,1 -k2,2 -k3,3 | cut -d'|' -f2-
 }
