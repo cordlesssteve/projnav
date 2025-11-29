@@ -3,7 +3,7 @@
 # Project Navigator - Hybrid menu/fuzzy finder for quick project switching
 # Usage: source this script from an alias to change directory in current shell
 
-readonly VERSION="2.3.0"
+readonly VERSION="2.4.0"
 
 # Note: We use 'set -u' for undefined variable detection, but NOT 'set -e'
 # to allow graceful error handling and menu looping
@@ -219,35 +219,54 @@ display_menu() {
             fi
         done
 
-        # Now that project_map is built, display header with recent projects
-        # Load recent history and create reverse lookup
-        local -a recent_with_indices
+        # Now that project_map is built, display header with recent and most accessed
+        # Create reverse lookup: path -> index
         local -A path_to_idx
         for idx in "${!project_map[@]}"; do
             path_to_idx["${project_map[$idx]}"]="$idx"
         done
 
         # Build recent history with correct indices
+        local -a recent_with_indices
         while IFS='|' read -r proj_path proj_name; do
             if [[ -n "${path_to_idx[$proj_path]:-}" ]]; then
                 recent_with_indices+=("${path_to_idx[$proj_path]}|$proj_name")
             fi
         done < <(load_recent_history)
 
+        # Build most accessed with correct indices and counts
+        local -a accessed_with_indices
+        while IFS='|' read -r proj_path proj_name count; do
+            if [[ -n "${path_to_idx[$proj_path]:-}" ]]; then
+                accessed_with_indices+=("${path_to_idx[$proj_path]}|$proj_name|$count")
+            fi
+        done < <(load_most_accessed)
+
         # Print header with options box
         echo ""
         echo -e "${COLOR_BOLD}${COLOR_BLUE}╔═══════════════════════════════════════════════════════════════╦══════════════════════════════════╗${COLOR_RESET}"
-        echo -e "${COLOR_BOLD}${COLOR_BLUE}║          PROJECT NAVIGATOR v2.2 - TWO COLUMN MODE             ║${COLOR_RESET}             ${COLOR_BOLD}OPTIONS${COLOR_RESET}              ${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}"
+        echo -e "${COLOR_BOLD}${COLOR_BLUE}║          PROJECT NAVIGATOR v2.4 - TWO COLUMN MODE             ║${COLOR_RESET}             ${COLOR_BOLD}OPTIONS${COLOR_RESET}              ${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}"
+        echo -e "${COLOR_BOLD}${COLOR_BLUE}╠═══════════════════════════════════════════════════════════════╬══════════════════════════════════╣${COLOR_RESET}"
 
-        # Helper function to pad left column to exactly 63 visible characters
-        pad_left() {
+        # Helper: pad Recent sub-column (30 chars)
+        pad_recent() {
             local text="$1"
             local visible_len=${#text}
-            local padding=$((63 - visible_len))
+            local padding=$((30 - visible_len))
+            [[ $padding -lt 0 ]] && padding=0
             printf "%s%*s" "$text" "$padding" ""
         }
 
-        # Helper function to pad option text (right column) to exactly 34 visible characters
+        # Helper: pad Most Accessed sub-column (32 chars)
+        pad_accessed() {
+            local text="$1"
+            local visible_len=${#text}
+            local padding=$((32 - visible_len))
+            [[ $padding -lt 0 ]] && padding=0
+            printf "%s%*s" "$text" "$padding" ""
+        }
+
+        # Helper: pad option text (right column, 34 chars)
         pad_option() {
             local text="$1"
             local visible_len=${#text}
@@ -255,79 +274,68 @@ display_menu() {
             printf "%s%*s" "$text" "$padding" ""
         }
 
-        # Recent projects display (left) with options (right)
-        if [[ ${#recent_with_indices[@]} -gt 0 ]]; then
-            # First line: Recent header + Select project option
-            local left_text="  Recent:"
-            local opt1="[1-$((index-1))] Select project"
-            printf "${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}${COLOR_BOLD}%s${COLOR_RESET}${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}${COLOR_YELLOW}%s${COLOR_RESET}${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}\n" "$(pad_left "$left_text")" "$(pad_option "$opt1")"
-
-            # Display up to 3 recent projects with corresponding options
-            local line_num=0
-            for recent_entry in "${recent_with_indices[@]}"; do
-                IFS='|' read -r proj_idx proj_name <<< "$recent_entry"
-                line_num=$((line_num + 1))
-
-                # Build left column text
-                local left_text=$(printf "    [%-3s] %-50s" "$proj_idx" "$proj_name")
-
-                # Build right column text
-                local opt=""
-                if [[ $line_num -eq 1 ]]; then
-                    if [[ "$FZF_AVAILABLE" == true ]]; then
-                        opt="[f]   Fuzzy search"
-                    else
-                        opt="[c]   Toggle columns ($([ "$USE_TWO_COLUMNS" == "true" ] && echo "TWO" || echo "ONE"))"
-                    fi
-                elif [[ $line_num -eq 2 ]]; then
-                    if [[ "$FZF_AVAILABLE" == true ]]; then
-                        opt="[c]   Toggle columns ($([ "$USE_TWO_COLUMNS" == "true" ] && echo "TWO" || echo "ONE"))"
-                    else
-                        opt="[t]   Toggle tags ($([ "$SHOW_TAGS" == "true" ] && echo "ON " || echo "OFF"))"
-                    fi
-                elif [[ $line_num -eq 3 ]]; then
-                    if [[ "$FZF_AVAILABLE" == true ]]; then
-                        opt="[t]   Toggle tags ($([ "$SHOW_TAGS" == "true" ] && echo "ON " || echo "OFF"))"
-                    else
-                        opt="[d#]  Show description"
-                    fi
-                fi
-
-                printf "${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}%s${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}${COLOR_YELLOW}%s${COLOR_RESET}${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}\n" \
-                    "$(pad_left "$left_text")" "$(pad_option "$opt")"
-            done
-
-            # Continue options after recent projects
-            local -a remaining_options=()
-            if [[ "$FZF_AVAILABLE" == true ]]; then
-                remaining_options+=("[d#]  Show description")
-            fi
-            remaining_options+=(
-                "[l]   Last project"
-                "[r]   Re-index projects"
-                "[q]   Quit"
-            )
-
-            for opt in "${remaining_options[@]}"; do
-                printf "${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}%s${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}${COLOR_YELLOW}%s${COLOR_RESET}${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}\n" "$(pad_left "")" "$(pad_option "$opt")"
-            done
-        else
-            # No recent history - just show options
-            local left_text="  Recent: (none)"
-            local opt1="[1-$((index-1))] Select project"
-            printf "${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}${COLOR_BOLD}%s${COLOR_RESET}${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}${COLOR_YELLOW}%s${COLOR_RESET}${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}\n" "$(pad_left "$left_text")" "$(pad_option "$opt1")"
-
-            if [[ "$FZF_AVAILABLE" == true ]]; then
-                printf "${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}%s${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}${COLOR_YELLOW}%s${COLOR_RESET}${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}\n" "$(pad_left "")" "$(pad_option "[f]   Fuzzy search")"
-            fi
-
-            printf "${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}%s${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}${COLOR_YELLOW}%s${COLOR_RESET}${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}\n" "$(pad_left "")" "$(pad_option "[c]   Toggle columns ($([ "$USE_TWO_COLUMNS" == "true" ] && echo "TWO" || echo "ONE"))")"
-            printf "${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}%s${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}${COLOR_YELLOW}%s${COLOR_RESET}${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}\n" "$(pad_left "")" "$(pad_option "[t]   Toggle tags ($([ "$SHOW_TAGS" == "true" ] && echo "ON " || echo "OFF"))")"
-            printf "${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}%s${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}${COLOR_YELLOW}%s${COLOR_RESET}${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}\n" "$(pad_left "")" "$(pad_option "[d#]  Show description")"
-            printf "${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}%s${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}${COLOR_YELLOW}%s${COLOR_RESET}${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}\n" "$(pad_left "")" "$(pad_option "[l]   Last project")"
-            printf "${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}%s${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}${COLOR_YELLOW}%s${COLOR_RESET}${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}\n" "$(pad_left "")" "$(pad_option "[r]   Re-index projects")"
-            printf "${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}%s${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}${COLOR_YELLOW}%s${COLOR_RESET}${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}\n" "$(pad_left "")" "$(pad_option "[q]   Quit")"
+        # Build options array (right column)
+        local -a all_options=()
+        all_options+=("[1-$((index-1))] Select project")
+        if [[ "$FZF_AVAILABLE" == true ]]; then
+            all_options+=("[f]   Fuzzy search")
         fi
+        all_options+=("[c]   Toggle columns ($([ "$USE_TWO_COLUMNS" == "true" ] && echo "TWO" || echo "ONE"))")
+        all_options+=("[t]   Toggle tags ($([ "$SHOW_TAGS" == "true" ] && echo "ON " || echo "OFF"))")
+        all_options+=("[d#]  Show description")
+        all_options+=("[l]   Last project")
+        all_options+=("[r]   Re-index projects")
+        all_options+=("[q]   Quit")
+
+        # Determine max rows needed (max of recent, accessed, options)
+        local recent_count=${#recent_with_indices[@]}
+        local accessed_count=${#accessed_with_indices[@]}
+        local options_count=${#all_options[@]}
+        local max_rows=$((recent_count > accessed_count ? recent_count : accessed_count))
+        max_rows=$((max_rows > options_count ? max_rows : options_count))
+        # Add 1 for headers row
+        max_rows=$((max_rows + 1))
+
+        # Display header row with sub-column titles
+        local recent_header="  Recent:"
+        local accessed_header="  Most Accessed:"
+        printf "${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}${COLOR_BOLD}%s${COLOR_RESET}│${COLOR_BOLD}%s${COLOR_RESET}${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}${COLOR_YELLOW}%s${COLOR_RESET}${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}\n" \
+            "$(pad_recent "$recent_header")" \
+            "$(pad_accessed "$accessed_header")" \
+            "$(pad_option "${all_options[0]}")"
+
+        # Display data rows (starting from index 0 for projects, index 1 for options)
+        for ((row=0; row<max_rows-1; row++)); do
+            # Recent column
+            local recent_text=""
+            if [[ $row -lt $recent_count ]]; then
+                IFS='|' read -r proj_idx proj_name <<< "${recent_with_indices[$row]}"
+                # Truncate name if too long (max 18 chars for name)
+                local short_name="${proj_name:0:18}"
+                recent_text=$(printf "   [%-3s] %-18s" "$proj_idx" "$short_name")
+            fi
+
+            # Most Accessed column
+            local accessed_text=""
+            if [[ $row -lt $accessed_count ]]; then
+                IFS='|' read -r proj_idx proj_name count <<< "${accessed_with_indices[$row]}"
+                # Truncate name if too long (max 16 chars for name)
+                local short_name="${proj_name:0:16}"
+                accessed_text=$(printf "   [%-3s] %-16s(%s)" "$proj_idx" "$short_name" "$count")
+            fi
+
+            # Options column (offset by 1 since header used first option)
+            local opt_text=""
+            local opt_row=$((row + 1))
+            if [[ $opt_row -lt $options_count ]]; then
+                opt_text="${all_options[$opt_row]}"
+            fi
+
+            printf "${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}%s│%s${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}${COLOR_YELLOW}%s${COLOR_RESET}${COLOR_BOLD}${COLOR_BLUE}║${COLOR_RESET}\n" \
+                "$(pad_recent "$recent_text")" \
+                "$(pad_accessed "$accessed_text")" \
+                "$(pad_option "$opt_text")"
+        done
 
         echo -e "${COLOR_BOLD}${COLOR_BLUE}╚═══════════════════════════════════════════════════════════════╩══════════════════════════════════╝${COLOR_RESET}\n"
 
@@ -870,6 +878,100 @@ display_menu() {
     esac
 }
 
+# Direct navigation to project by number (non-interactive)
+# Builds the same project_map as display_menu, then navigates to the specified index
+go_to_project() {
+    local target_num="$1"
+
+    # Validate input
+    if ! [[ "$target_num" =~ ^[0-9]+$ ]]; then
+        echo -e "${COLOR_RED}✗${COLOR_RESET} Invalid project number: $target_num"
+        return 1
+    fi
+
+    local projects
+    mapfile -t projects < <(discover_projects)
+
+    if [[ ${#projects[@]} -eq 0 ]]; then
+        echo -e "${COLOR_YELLOW}⚠${COLOR_RESET} No projects found!"
+        return 1
+    fi
+
+    # Build project_map using the same logic as display_menu
+    local -A project_map
+    local index=1
+
+    # Sort projects
+    local sorted_projects
+    mapfile -t sorted_projects < <(sort_projects "${projects[@]}")
+
+    for project_data in "${sorted_projects[@]}"; do
+        IFS='|' read -r category project path is_external is_suite_parent is_suite_child <<< "$project_data"
+
+        # Skip if this project is a child (will be added under parent)
+        if is_group_child "$project"; then
+            continue
+        fi
+
+        # Add parent/standalone project
+        project_map[$index]="$path"
+        ((index++))
+
+        # Add children if suite parent
+        if is_group_parent "$project"; then
+            IFS=',' read -ra children <<< "$(get_group_children "$project")"
+
+            for child in "${children[@]}"; do
+                # Skip if child has same name as parent
+                if [[ "$child" == "$project" ]]; then
+                    continue
+                fi
+
+                # Look up child path
+                for child_data in "${sorted_projects[@]}"; do
+                    IFS='|' read -r c_cat c_proj c_path c_ext c_parent c_child <<< "$child_data"
+                    if [[ "$c_proj" == "$child" ]]; then
+                        project_map[$index]="$c_path"
+                        ((index++))
+                        break
+                    fi
+                done
+            done
+        fi
+    done
+
+    # Navigate to the specified index
+    if [[ -n "${project_map[$target_num]:-}" ]]; then
+        local target_path="${project_map[$target_num]}"
+        cd "$target_path" || {
+            echo -e "${COLOR_RED}✗${COLOR_RESET} Failed to change directory to: $target_path"
+            return 1
+        }
+        save_state "$target_path"
+        echo -e "${COLOR_GREEN}✓${COLOR_RESET} Changed to: ${COLOR_CYAN}$target_path${COLOR_RESET}"
+        return 0
+    else
+        echo -e "${COLOR_YELLOW}⚠${COLOR_RESET} Invalid selection: $target_num (valid range: 1-$((index-1)))"
+        return 1
+    fi
+}
+
+# Navigate to last project
+go_to_last() {
+    local last_project=$(load_state)
+    if [[ -n "$last_project" ]] && [[ -d "$last_project" ]]; then
+        cd "$last_project" || {
+            echo -e "${COLOR_RED}✗${COLOR_RESET} Failed to change directory to: $last_project"
+            return 1
+        }
+        echo -e "${COLOR_GREEN}✓${COLOR_RESET} Changed to: ${COLOR_CYAN}$last_project${COLOR_RESET}"
+        return 0
+    else
+        echo -e "${COLOR_YELLOW}⚠${COLOR_RESET} No last project available"
+        return 1
+    fi
+}
+
 # Config validation
 validate_config() {
     echo -e "${COLOR_BOLD}${COLOR_BLUE}Validating projnav configuration...${COLOR_RESET}\n"
@@ -985,11 +1087,17 @@ main() {
         echo ""
         echo "Options:"
         echo "  -f, --fuzzy           Fuzzy search mode (requires fzf)"
+        echo "  -g, --go N            Go directly to project number N"
+        echo "  -l, --last            Go to last visited project"
         echo "  -v, --version         Show version"
         echo "  -h, --help            Show this help"
         echo "  --validate-config     Validate configuration"
         echo "  --show-config         Show effective configuration"
         echo "  --rebuild             Rebuild project index"
+        echo ""
+        echo "Quick Navigation (for shell aliases):"
+        echo "  m N                   Shorthand for --go N (e.g., 'm 20')"
+        echo "  ml                    Shorthand for --last"
         echo ""
         echo "Interactive Commands:"
         echo "  [1-N]    Select project by number"
@@ -1011,6 +1119,22 @@ main() {
     if [[ "${1:-}" == "-v" ]] || [[ "${1:-}" == "--version" ]]; then
         echo "projnav version $VERSION"
         return 0
+    fi
+
+    # Handle direct navigation to project number
+    if [[ "${1:-}" == "-g" ]] || [[ "${1:-}" == "--go" ]]; then
+        if [[ -z "${2:-}" ]]; then
+            echo -e "${COLOR_RED}✗${COLOR_RESET} Missing project number. Usage: projnav --go N"
+            return 1
+        fi
+        go_to_project "$2"
+        return $?
+    fi
+
+    # Handle last project navigation
+    if [[ "${1:-}" == "-l" ]] || [[ "${1:-}" == "--last" ]]; then
+        go_to_last
+        return $?
     fi
 
     # Handle config validation

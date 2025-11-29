@@ -112,6 +112,11 @@ load_yaml_config() {
         local show_desc=$(read_yaml_value ".display.show_descriptions" "false")
         [[ "$show_desc" == "true" ]] && SHOW_DESCRIPTIONS=true || SHOW_DESCRIPTIONS=false
     fi
+
+    # Load recent projects count (defaults to 3 for backward compatibility)
+    if [[ -z "${RECENT_PROJECTS_COUNT:-}" ]]; then
+        RECENT_PROJECTS_COUNT=$(read_yaml_value ".display.recent_projects_count" "3")
+    fi
 }
 
 # Load config on library source
@@ -132,6 +137,9 @@ if [[ -z "${PROJECT_METADATA_CACHE:-}" ]]; then
 fi
 if [[ -z "${PROJECT_CACHE_JSON:-}" ]]; then
     readonly PROJECT_CACHE_JSON="$HOME/.config/projnav/cache/projects.json"
+fi
+if [[ -z "${PROJECT_ACCESS_COUNTS:-}" ]]; then
+    readonly PROJECT_ACCESS_COUNTS="$HOME/.config/projnav/cache/access_counts.json"
 fi
 
 # Search configuration for smart git-aware discovery
@@ -736,18 +744,52 @@ save_state() {
     mkdir -p "$(dirname "$PROJECT_STATE")"
     echo "$project_path" > "$PROJECT_STATE"
 
-    # Update history (keep last 3 unique projects)
+    # Update history (keep configured number of unique projects)
+    local history_count=${RECENT_PROJECTS_COUNT:-3}
     local temp_history=$(mktemp)
 
     # Add current selection to top
     echo "$project_path" > "$temp_history"
 
-    # Add previous entries if they're different
+    # Add previous entries if they're different (history_count - 1 for the current one)
     if [[ -f "$PROJECT_HISTORY" ]]; then
-        grep -v "^${project_path}$" "$PROJECT_HISTORY" | head -n 2 >> "$temp_history"
+        grep -v "^${project_path}$" "$PROJECT_HISTORY" | head -n $((history_count - 1)) >> "$temp_history"
     fi
 
     mv "$temp_history" "$PROJECT_HISTORY"
+
+    # Update access counts (lifetime tracking)
+    increment_access_count "$project_path"
+}
+
+# Increment access count for a project path
+increment_access_count() {
+    local project_path="$1"
+
+    # Ensure jq is available
+    if ! command -v jq &>/dev/null; then
+        return 0  # Silently skip if jq not available
+    fi
+
+    # Initialize empty JSON if file doesn't exist
+    if [[ ! -f "$PROJECT_ACCESS_COUNTS" ]]; then
+        echo '{}' > "$PROJECT_ACCESS_COUNTS"
+    fi
+
+    # Escape the path for use as a JSON key
+    local escaped_path=$(echo "$project_path" | sed 's/"/\\"/g')
+
+    # Increment the count (or set to 1 if new)
+    local temp_file=$(mktemp)
+    jq --arg path "$escaped_path" \
+        '.[$path] = ((.[$path] // 0) + 1)' \
+        "$PROJECT_ACCESS_COUNTS" > "$temp_file" 2>/dev/null
+
+    if [[ $? -eq 0 ]]; then
+        mv "$temp_file" "$PROJECT_ACCESS_COUNTS"
+    else
+        rm -f "$temp_file"
+    fi
 }
 
 # Load last selected project
@@ -774,4 +816,31 @@ load_recent_history() {
             echo "$project_path|$project_name"
         fi
     done < "$PROJECT_HISTORY"
+}
+
+# Load most accessed projects (sorted by access count descending)
+# Returns: project_path|project_name|count (one per line, limited to configured count)
+load_most_accessed() {
+    if [[ ! -f "$PROJECT_ACCESS_COUNTS" ]]; then
+        return
+    fi
+
+    # Ensure jq is available
+    if ! command -v jq &>/dev/null; then
+        return
+    fi
+
+    local limit=${RECENT_PROJECTS_COUNT:-7}
+
+    # Parse JSON, sort by count descending, limit results
+    # Output: path|name|count
+    jq -r 'to_entries | sort_by(-.value) | .[:'"$limit"'] | .[] | "\(.key)|\(.value)"' \
+        "$PROJECT_ACCESS_COUNTS" 2>/dev/null | \
+    while IFS='|' read -r project_path count; do
+        # Only include if directory still exists
+        if [[ -d "$project_path" ]]; then
+            local project_name=$(basename "$project_path")
+            echo "$project_path|$project_name|$count"
+        fi
+    done
 }

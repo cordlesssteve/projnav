@@ -10,10 +10,13 @@ Based on analysis of the current system and comparison with the old "master" nav
 - Category-based organization (`[Work]`, `[Utility → DEV-TOOLS]`, etc.)
 - Suite parent-child relationships
 - Smart flow wrapping for projects
-- Recent projects history in header
-- Two-column boxed header
+- Recent projects history in header (configurable count)
+- **Most Accessed projects tracking with lifetime counts** (v2.4)
+- **Direct navigation: `m N` and `ml` shortcuts** (v2.4)
+- Two-column boxed header with Recent/Most Accessed sub-columns
 - Filter `.disabled` projects
 - Fuzzy search with fzf integration
+- YAML configuration system with comprehensive options
 
 ## Recommended Improvements
 
@@ -341,23 +344,34 @@ $ pn --search "tech:React status:production"
 
 ## Implementation Priority
 
-### Phase 1: Foundation (v2.3)
+### Phase 1: Foundation (v2.3) ✅ COMPLETE
 1. ✅ YAML configuration schema design
-2. ⏳ YAML parser implementation
-3. ⏳ Config migration tool
-4. ⏳ Pattern-based discovery
+2. ✅ YAML parser implementation
+3. ✅ Config validation (`--validate-config`)
+4. ✅ Pattern-based discovery
 
-### Phase 2: Enhancement (v2.4)
-5. Enhanced metadata system
-6. Git status indicators
-7. Multi-column suite display
+### Phase 2: Enhancement (v2.4) ✅ COMPLETE
+5. ✅ Most Accessed projects tracking (lifetime counts)
+6. ✅ Two sub-column header (Recent + Most Accessed)
+7. ✅ Direct navigation shortcuts (`m N`, `ml`, `--go N`, `--last`)
+8. ✅ Configurable recent projects count
 
-### Phase 3: Advanced (v2.5)
-8. Pinned projects
-9. Project aliases
-10. Saved workspaces
-11. Custom hooks
-12. Search enhancements
+### Phase 2.5: Additional Enhancements (v2.5)
+- Enhanced metadata system
+- Git status indicators
+- Multi-column suite display
+
+### Phase 3: Access Analytics (v2.6)
+- Access count decay/weighting toggle (time-weighted vs lifetime counts)
+- Access pattern visualization
+- Configurable decay algorithm (exponential, linear, step)
+
+### Phase 4: Advanced (v2.7+)
+- Pinned projects
+- Project aliases
+- Saved workspaces
+- Custom hooks
+- Search enhancements
 
 ---
 
