@@ -128,6 +128,7 @@ display_menu() {
     # Declare project_map and index at function scope (used by both layouts)
     local -A project_map
     local index=1
+    local last_project=$(load_state)
 
     # Use two-column layout for wide terminals
     if [[ "$USE_TWO_COLUMNS" == "true" ]]; then
@@ -761,6 +762,7 @@ display_menu() {
                     sleep 1
                     return 1
                 }
+                save_state "$last_project"
                 echo -e "${COLOR_GREEN}✓${COLOR_RESET} Changed to: ${COLOR_CYAN}$last_project${COLOR_RESET}"
                 return 0  # Success, exit loop
             else
@@ -964,6 +966,7 @@ go_to_last() {
             echo -e "${COLOR_RED}✗${COLOR_RESET} Failed to change directory to: $last_project"
             return 1
         }
+        save_state "$last_project"
         echo -e "${COLOR_GREEN}✓${COLOR_RESET} Changed to: ${COLOR_CYAN}$last_project${COLOR_RESET}"
         return 0
     else
